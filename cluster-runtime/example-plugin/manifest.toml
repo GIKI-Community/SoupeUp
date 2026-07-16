@@ -1,0 +1,9 @@
+id = "example-plugin"
+name = "Example Plugin"
+version = "1.0.0"
+author = "Cluster Runtime"
+description = "A dynamically loaded example plugin"
+plugin_type = "runtime"
+api_version = "1"
+entry = "example_plugin.dll"
+dependencies = []

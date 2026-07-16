@@ -1,0 +1,16 @@
+# MASTER
+
+cd supercomputer && source venv31213/bin/activate
+
+pip install dask distributed jupyterlab
+dask-scheduler
+
+dask-worker localhost:8786 --nthreads 5
+
+jupyter lab --ip=0.0.0.0 --port=8888 --no-browser
+
+
+# SLAVE
+
+pip install dask distributed
+dask-worker 10.1.135.61:8786 --nthreads 8 --memory-limit 16GB
