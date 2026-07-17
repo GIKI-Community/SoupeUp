@@ -8,6 +8,7 @@
 
 pub mod client;
 pub mod dashboard;
+pub mod examples;
 pub mod jobs;
 pub mod monitoring;
 pub mod plugin;
@@ -19,6 +20,6 @@ pub mod settings;
 pub mod types;
 pub mod worker;
 
-pub use plugin::DaskSchedulerPlugin;
 pub use services::DaskService;
+pub use services::example_failure;
 pub use types::*;

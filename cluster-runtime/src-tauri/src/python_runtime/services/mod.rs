@@ -226,6 +226,11 @@ impl PythonExecutionService {
         self.background.list().await
     }
 
+    /// Stop all background Python processes (scheduler, worker, etc.).
+    pub async fn shutdown(&self) {
+        self.background.stop_all().await;
+    }
+
     // ─── Internal ─────────────────────────────────────────────────────────────
 
     /// Guard: ensure the service finished initializing before accepting calls.

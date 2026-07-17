@@ -3,39 +3,62 @@ import { create } from "zustand";
 import { MetricsApi } from "@/api";
 import type { MetricPoint, MetricsSnapshot } from "@/types";
 
+import { useDaskStore } from "./dask-store";
+
+const MAX_POINTS = 30;
+
 interface MetricsState {
   snapshot: MetricsSnapshot | null;
+  initialized: boolean;
   isLoading: boolean;
   error: string | null;
   fetchMetrics: () => Promise<void>;
   appendAnimatedPoint: () => void;
 }
 
-function shiftSeries(points: MetricPoint[], newValue: number): MetricPoint[] {
-  const next = [
-    ...points.slice(1),
-    { timestamp: new Date().toISOString(), value: newValue },
+function appendPoint(points: MetricPoint[], newValue: number): MetricPoint[] {
+  const next: MetricPoint[] = [
+    ...points,
+    { timestamp: new Date().toISOString(), value: Math.round(newValue * 10) / 10 },
   ];
-  return next;
+  return next.length > MAX_POINTS ? next.slice(next.length - MAX_POINTS) : next;
 }
 
-function jitter(base: number, variance: number): number {
-  return Math.max(0, base + (Math.random() - 0.5) * variance * 2);
+function nextValue(
+  points: MetricPoint[],
+  daskValue: number | undefined,
+  fallbackJitterBase: number,
+  variance: number,
+): number {
+  if (daskValue != null) return daskValue;
+  if (points.length === 0) return 0;
+  return Math.max(
+    0,
+    fallbackJitterBase + (Math.random() - 0.5) * variance * 2,
+  );
 }
 
 export const useMetricsStore = create<MetricsState>((set, get) => ({
   snapshot: null,
+  initialized: false,
   isLoading: false,
   error: null,
   fetchMetrics: async () => {
+    if (get().initialized) return;
+
     set({ isLoading: true, error: null });
     try {
       const snapshot = await MetricsApi.get();
-      set({ snapshot, isLoading: false });
+      set({ snapshot, initialized: true, isLoading: false });
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to load metrics",
+        error:
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "Failed to load metrics",
       });
     }
   },
@@ -43,10 +66,21 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     const { snapshot } = get();
     if (!snapshot) return;
 
-    const lastCpu = snapshot.cpu.points.at(-1)?.value ?? 40;
-    const lastMem = snapshot.memory.points.at(-1)?.value ?? 55;
-    const lastNet = snapshot.network.points.at(-1)?.value ?? 120;
-    const lastDisk = snapshot.disk.points.at(-1)?.value ?? 45;
+    const dask = useDaskStore.getState().metrics;
+    const lastCpu = snapshot.cpu.points.at(-1)?.value ?? 0;
+    const lastMem = snapshot.memory.points.at(-1)?.value ?? 0;
+    const lastNet = snapshot.network.points.at(-1)?.value ?? 0;
+    const lastDisk = snapshot.disk.points.at(-1)?.value ?? 0;
+
+    const cpuVal = nextValue(snapshot.cpu.points, dask?.workerCpu, lastCpu, 6);
+    const memVal = nextValue(snapshot.memory.points, dask?.workerMemory, lastMem, 4);
+    const netVal = nextValue(
+      snapshot.network.points,
+      dask != null ? dask.dataTransfer / (1024 * 1024) : undefined,
+      lastNet,
+      25,
+    );
+    const diskVal = nextValue(snapshot.disk.points, dask?.tasksPerSec, lastDisk, 12);
 
     set({
       snapshot: {
@@ -54,19 +88,19 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
         collectedAt: new Date().toISOString(),
         cpu: {
           ...snapshot.cpu,
-          points: shiftSeries(snapshot.cpu.points, jitter(lastCpu, 6)),
+          points: appendPoint(snapshot.cpu.points, cpuVal),
         },
         memory: {
           ...snapshot.memory,
-          points: shiftSeries(snapshot.memory.points, jitter(lastMem, 4)),
+          points: appendPoint(snapshot.memory.points, memVal),
         },
         network: {
           ...snapshot.network,
-          points: shiftSeries(snapshot.network.points, jitter(lastNet, 25)),
+          points: appendPoint(snapshot.network.points, netVal),
         },
         disk: {
           ...snapshot.disk,
-          points: shiftSeries(snapshot.disk.points, jitter(lastDisk, 12)),
+          points: appendPoint(snapshot.disk.points, diskVal),
         },
       },
     });

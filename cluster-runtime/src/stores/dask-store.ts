@@ -1,13 +1,17 @@
 import { create } from "zustand";
 
 import { DaskApi } from "@/api";
-import type {
-  ClusterSnapshot,
-  DashboardView,
-  DaskMetrics,
-  DaskSettings,
-  ExampleJobResult,
+import {
+  DASK_EXAMPLES,
+  exampleErrorMessage,
+  type ClusterSnapshot,
+  type DashboardView,
+  type DaskMetrics,
+  type DaskSettings,
+  type ExampleJobResult,
 } from "@/types";
+
+import { useJobsStore } from "./jobs-store";
 
 interface DaskState {
   snapshot: ClusterSnapshot | null;
@@ -39,7 +43,22 @@ interface DaskState {
 }
 
 function errMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    if (typeof record.message === "string" && record.message.trim()) {
+      return record.message;
+    }
+    if (typeof record.error === "string" && record.error.trim()) {
+      return record.error;
+    }
+  }
+  return fallback;
 }
 
 export const useDaskStore = create<DaskState>((set, get) => ({
@@ -233,18 +252,42 @@ export const useDaskStore = create<DaskState>((set, get) => ({
   },
 
   runExample: async (exampleId) => {
+    const title =
+      DASK_EXAMPLES.find((ex) => ex.id === exampleId)?.title ?? exampleId;
     set({ isRunningExample: true, error: null, lastExample: null });
     try {
       const lastExample = await DaskApi.runExample(exampleId);
-      set({ lastExample, isRunningExample: false });
+      const failureMessage = lastExample.success
+        ? null
+        : exampleErrorMessage(lastExample);
+      set({
+        lastExample,
+        isRunningExample: false,
+        error: failureMessage,
+      });
       await get().fetchSnapshot();
       return lastExample;
     } catch (error) {
+      const message = errMessage(error, "Example job failed");
       set({
         isRunningExample: false,
-        error: errMessage(error, "Example job failed"),
+        error: message,
+        lastExample: {
+          exampleId,
+          title,
+          success: false,
+          executionTimeMs: 0,
+          workersUsed: 0,
+          cpuUtilization: null,
+          speedup: null,
+          resultSummary: "",
+          details: null,
+          error: message,
+        },
       });
       return null;
+    } finally {
+      void useJobsStore.getState().fetchJobs();
     }
   },
 }));

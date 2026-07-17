@@ -102,7 +102,7 @@ export const PythonApi = {
     invokeCommand<ExecutionResult>("python_execute_code", { code }),
   executeScript: (scriptPath: string) =>
     invokeCommand<ExecutionResult>("python_execute_script", {
-      script_path: scriptPath,
+      scriptPath,
     }),
   executeModule: (module: string) =>
     invokeCommand<ExecutionResult>("python_execute_module", { module }),
@@ -127,7 +127,7 @@ export const PythonApi = {
   version: () => invokeCommand<string>("python_version"),
   packageIndex: () => invokeCommand<string>("python_package_index"),
   setPackageIndex: (indexUrl: string) =>
-    invokeCommand<void>("python_set_package_index", { index_url: indexUrl }),
+    invokeCommand<void>("python_set_package_index", { indexUrl }),
 };
 
 export const DaskApi = {
@@ -142,7 +142,7 @@ export const DaskApi = {
   schedulerStatus: () => invokeCommand<SchedulerInfo>("dask_scheduler_status"),
   startWorker: (schedulerAddress?: string) =>
     invokeCommand<WorkerInfo>("dask_start_worker", {
-      scheduler_address: schedulerAddress ?? null,
+      schedulerAddress: schedulerAddress ?? null,
     }),
   stopWorker: () => invokeCommand<WorkerInfo>("dask_stop_worker"),
   restartWorker: () => invokeCommand<WorkerInfo>("dask_restart_worker"),
@@ -157,11 +157,11 @@ export const DaskApi = {
   metrics: () => invokeCommand<DaskMetrics>("dask_metrics"),
   runExample: (exampleId: string) =>
     invokeCommand<ExampleJobResult>("dask_run_example", {
-      example_id: exampleId,
+      exampleId,
     }),
   submitPythonFunction: (functionBody: string, args: unknown) =>
     invokeCommand<unknown>("dask_submit_python_function", {
-      function_body: functionBody,
+      functionBody,
       args,
     }),
   submitScript: (script: string) =>
@@ -169,11 +169,11 @@ export const DaskApi = {
   submitModule: (module: string) =>
     invokeCommand<unknown>("dask_submit_module", { module }),
   map: (functionBody: string, items: unknown) =>
-    invokeCommand<unknown>("dask_map", { function_body: functionBody, items }),
+    invokeCommand<unknown>("dask_map", { functionBody, items }),
   scatter: (data: unknown) => invokeCommand<unknown>("dask_scatter", { data }),
   gather: (keys: unknown) => invokeCommand<unknown>("dask_gather", { keys }),
   jobStatus: (jobId: string) =>
-    invokeCommand<unknown>("dask_job_status", { job_id: jobId }),
+    invokeCommand<unknown>("dask_job_status", { jobId }),
   cancelJob: (jobId: string) =>
-    invokeCommand<void>("dask_cancel_job", { job_id: jobId }),
+    invokeCommand<void>("dask_cancel_job", { jobId }),
 };

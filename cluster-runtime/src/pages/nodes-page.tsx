@@ -62,6 +62,11 @@ export function NodesPage() {
   useEffect(() => {
     void fetchNodes();
     void fetchSummary();
+    const timer = window.setInterval(() => {
+      void fetchNodes();
+      void fetchSummary();
+    }, 2500);
+    return () => window.clearInterval(timer);
   }, [fetchNodes, fetchSummary]);
 
   const filteredNodes = useMemo(() => {
@@ -180,7 +185,17 @@ export function NodesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredNodes.map((node) => (
+            {filteredNodes.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={sortableColumns.length}
+                  className="py-8 text-center text-sm text-muted-foreground"
+                >
+                  No nodes connected. Start the Dask scheduler and a worker on the Cluster page.
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredNodes.map((node) => (
               <TableRow key={node.id}>
                 <TableCell className="font-medium">{node.name}</TableCell>
                 <TableCell>{platformLabels[node.platform]}</TableCell>
@@ -195,7 +210,8 @@ export function NodesPage() {
                   {formatRelativeTime(node.lastSeen)}
                 </TableCell>
               </TableRow>
-            ))}
+              ))
+            )}
           </TableBody>
         </Table>
       </div>

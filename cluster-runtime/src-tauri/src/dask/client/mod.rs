@@ -110,6 +110,19 @@ impl ClientManager {
         self.run_job_script(&code).await
     }
 
+    /// Run distributed orchestration in the client process (`client` + `ARGS` in scope).
+    pub async fn orchestrate(
+        &self,
+        body: &str,
+        args: serde_json::Value,
+    ) -> DaskResult<JobResult> {
+        let addr = self.require_address().await?;
+        let args_json = serde_json::to_string(&args)
+            .map_err(|e| DaskError::JsonError(e.to_string()))?;
+        let code = scripts::orchestration_script(&addr, body, &args_json);
+        self.run_job_script(&code).await
+    }
+
     pub async fn map(
         &self,
         function_body: &str,
@@ -161,7 +174,29 @@ def user_fn(item):
             .await
             .map_err(|e| DaskError::JobError(e.to_string()))?;
 
-        let payload = parse_json_stdout(&result.stdout)?;
+        let payload = match parse_json_stdout(&result.stdout) {
+            Ok(payload) => payload,
+            Err(e) => {
+                let mut detail = result.stderr.trim().to_string();
+                if detail.is_empty() {
+                    detail = result.stdout.trim().to_string();
+                }
+                if detail.is_empty() {
+                    detail = format!("Python exited with code {}", result.exit_code);
+                }
+                return Ok(JobResult {
+                    job_id: uuid::Uuid::new_v4().to_string(),
+                    success: false,
+                    result: None,
+                    error: Some(format!("{} Output: {}", e, truncate_output(&detail, 800))),
+                    execution_time_ms: result.execution_time_ms,
+                    workers_used: 0,
+                    cpu_utilization: None,
+                    speedup: None,
+                });
+            }
+        };
+
         if payload.get("ok").and_then(|v| v.as_bool()) != Some(true) {
             let err = payload
                 .get("error")
@@ -213,4 +248,12 @@ fn parse_json_stdout(stdout: &str) -> DaskResult<serde_json::Value> {
             e, stdout
         ))
     })
+}
+
+fn truncate_output(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }

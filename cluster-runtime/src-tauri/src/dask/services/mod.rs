@@ -62,6 +62,11 @@ impl DaskService {
 
     /// Ensure required packages are installed via the Python Runtime package manager.
     pub async fn ensure_packages(&self) -> DaskResult<Vec<String>> {
+        self.ensure_packages_list(REQUIRED_PACKAGES).await
+    }
+
+    /// Install any missing packages from the given list (e.g. example-specific deps).
+    pub async fn ensure_packages_list(&self, packages: &[&str]) -> DaskResult<Vec<String>> {
         let installed = self
             .python
             .list_packages()
@@ -74,7 +79,7 @@ impl DaskService {
             .collect();
 
         let mut newly = Vec::new();
-        for pkg in REQUIRED_PACKAGES {
+        for pkg in packages {
             if !installed_names.contains(&pkg.to_ascii_lowercase()) {
                 log::info!("Dask plugin: installing missing package '{}'", pkg);
                 self.python
@@ -222,8 +227,37 @@ impl DaskService {
     }
 
     pub async fn run_example(&self, example_id: String) -> DaskResult<ExampleJobResult> {
-        self.ensure_packages().await?;
+        if let Err(e) = self.ensure_packages().await {
+            return Ok(example_failure(&example_id, e.to_string()));
+        }
+        let extra = crate::dask::examples::packages_for(&example_id);
+        if !extra.is_empty() {
+            if let Err(e) = self.ensure_packages_list(extra).await {
+                return Ok(example_failure(&example_id, e.to_string()));
+            }
+        }
+        if let Err(e) = self.ensure_cluster_ready().await {
+            return Ok(example_failure(&example_id, e.to_string()));
+        }
         self.jobs.run_example(&example_id).await
+    }
+
+    async fn ensure_cluster_ready(&self) -> DaskResult<()> {
+        let sched = self.scheduler.status().await;
+        if sched.status != ComponentStatus::Running {
+            return Err(DaskError::SchedulerError(
+                "Start the Dask scheduler first (Cluster page → Start Scheduler).".into(),
+            ));
+        }
+
+        let snap = self.monitoring.snapshot().await?;
+        if snap.workers.is_empty() {
+            return Err(DaskError::WorkerError(
+                "No workers are connected. Start at least one worker (Cluster page → Start Worker)."
+                    .into(),
+            ));
+        }
+        Ok(())
     }
 
     // ─── Monitoring / Dashboard ───────────────────────────────────────────────
@@ -239,5 +273,32 @@ impl DaskService {
     pub async fn dashboard(&self) -> DashboardView {
         let settings = self.settings.read().await;
         dashboard_view(&settings)
+    }
+
+    /// Stop worker, scheduler, and any remaining background Python processes.
+    pub async fn shutdown(&self) {
+        log::info!("Dask Scheduler Plugin: shutting down...");
+        let _ = self.client.disconnect().await;
+        let _ = self.worker.stop().await;
+        let _ = self.scheduler.stop().await;
+        self.python.shutdown().await;
+    }
+}
+
+pub fn example_failure(example_id: &str, message: String) -> ExampleJobResult {
+    let title = crate::dask::examples::get(example_id)
+        .map(|spec| spec.title.to_string())
+        .unwrap_or_else(|| "Example Job".to_string());
+    ExampleJobResult {
+        example_id: example_id.to_string(),
+        title,
+        success: false,
+        execution_time_ms: 0,
+        workers_used: 0,
+        cpu_utilization: None,
+        speedup: None,
+        result_summary: String::new(),
+        details: None,
+        error: Some(message),
     }
 }

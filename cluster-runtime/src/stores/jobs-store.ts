@@ -45,7 +45,12 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     } catch (error) {
       set({
         isLoading: false,
-        error: error instanceof Error ? error.message : "Failed to load jobs",
+        error:
+          typeof error === "string"
+            ? error
+            : error instanceof Error
+              ? error.message
+              : "Failed to load jobs",
       });
     }
   },

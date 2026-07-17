@@ -38,7 +38,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/layouts/app-layout";
 import { useDaskStore } from "@/stores";
-import { DASK_EXAMPLES, type ComponentStatus } from "@/types";
+import { DASK_EXAMPLES, exampleErrorMessage, type ComponentStatus } from "@/types";
 
 function statusVariant(
   status: ComponentStatus | string,
@@ -134,6 +134,14 @@ export function ClusterPage() {
   const localWorker = snapshot?.localWorker;
   const dashTab =
     dashboard?.tabs.find((t) => t.id === activeDashTab) ?? dashboard?.tabs[0];
+  const schedulerRunning = scheduler?.status === "running";
+  const workerCount = snapshot?.workers.length ?? 0;
+  const examplesReady = schedulerRunning && workerCount > 0;
+  const examplesBlockedReason = !schedulerRunning
+    ? "Start the Dask scheduler before running examples."
+    : workerCount === 0
+      ? "Start at least one worker before running examples."
+      : null;
 
   return (
     <div>
@@ -408,6 +416,11 @@ export function ClusterPage() {
             <CardTitle>Example Jobs</CardTitle>
             <CardDescription>
               Zero-code demos that prove multi-node distribution.
+              {examplesBlockedReason ? (
+                <span className="mt-1 block text-amber-600 dark:text-amber-400">
+                  {examplesBlockedReason}
+                </span>
+              ) : null}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -419,10 +432,16 @@ export function ClusterPage() {
                 <div>
                   <p className="text-sm font-medium">{ex.title}</p>
                   <p className="text-xs text-muted-foreground">{ex.description}</p>
+                  {ex.packages.length > 0 ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Requires: {ex.packages.join(", ")}
+                    </p>
+                  ) : null}
                 </div>
                 <Button
                   size="sm"
-                  disabled={isRunningExample}
+                  disabled={isRunningExample || !examplesReady}
+                  title={examplesBlockedReason ?? undefined}
                   onClick={() => void runExample(ex.id)}
                 >
                   {isRunningExample ? (
@@ -466,8 +485,16 @@ export function ClusterPage() {
                     ? `${lastExample.speedup.toFixed(2)}×`
                     : "—"}
                 </p>
-                <p className="break-all text-muted-foreground">
-                  {lastExample.error ?? lastExample.resultSummary}
+                <p
+                  className={
+                    lastExample.success
+                      ? "break-all text-muted-foreground"
+                      : "break-all rounded-md border border-destructive/40 bg-destructive/10 p-3 text-destructive"
+                  }
+                >
+                  {lastExample.success
+                    ? lastExample.resultSummary
+                    : exampleErrorMessage(lastExample)}
                 </p>
               </div>
             )}

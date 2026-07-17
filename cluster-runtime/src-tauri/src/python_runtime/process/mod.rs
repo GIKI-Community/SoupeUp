@@ -41,6 +41,7 @@ pub struct BackgroundProcessInfo {
 struct ManagedProcess {
     id: String,
     label: String,
+    pid: Option<u32>,
     child: Child,
     script_path: PathBuf,
     started_at: DateTime<Utc>,
@@ -118,7 +119,6 @@ impl BackgroundProcessManager {
 
         #[cfg(windows)]
         {
-            use std::os::windows::process::CommandExt;
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
@@ -186,6 +186,7 @@ impl BackgroundProcessManager {
         let managed = ManagedProcess {
             id: id.clone(),
             label: label.to_string(),
+            pid,
             child,
             script_path: if owns_script {
                 script_path.to_path_buf()
@@ -212,24 +213,75 @@ impl BackgroundProcessManager {
     }
 
     pub async fn stop(&self, id: &str) -> PythonResult<BackgroundProcessInfo> {
-        let mut processes = self.processes.write().await;
-        let proc = processes.get_mut(id).ok_or_else(|| {
-            PythonError::ExecutionError(format!("Background process not found: {}", id))
-        })?;
+        let mut proc = self
+            .processes
+            .write()
+            .await
+            .remove(id)
+            .ok_or_else(|| {
+                PythonError::ExecutionError(format!("Background process not found: {}", id))
+            })?;
 
+        let pid = proc.pid;
+        kill_process_tree(pid);
         let _ = proc.child.kill().await;
         let status = proc.child.try_wait().ok().flatten();
         proc.status = ProcessStatus::Stopped;
         proc.exit_code = status.and_then(|s| s.code());
 
-        let info = self.to_info(proc).await;
+        let info = BackgroundProcessInfo {
+            id: proc.id.clone(),
+            label: proc.label.clone(),
+            status: proc.status.clone(),
+            pid,
+            started_at: proc.started_at,
+            exit_code: proc.exit_code,
+            stdout_tail: proc.stdout.read().await.clone(),
+            stderr_tail: proc.stderr.read().await.clone(),
+        };
 
         if !proc.script_path.as_os_str().is_empty() {
             let _ = tokio::fs::remove_file(&proc.script_path).await;
         }
 
-        log::info!("Background process stopped: {}", id);
+        log::info!("Background process stopped: {} (pid={:?})", id, pid);
         Ok(info)
+    }
+
+    /// Kill every tracked background process by PID (used on app exit).
+    pub async fn stop_all(&self) {
+        let targets: Vec<(String, Option<u32>, PathBuf)> = {
+            let processes = self.processes.read().await;
+            processes
+                .iter()
+                .map(|(id, proc)| (id.clone(), proc.pid, proc.script_path.clone()))
+                .collect()
+        };
+
+        if targets.is_empty() {
+            return;
+        }
+
+        log::info!(
+            "Stopping {} background Python process(es)...",
+            targets.len()
+        );
+
+        for (id, pid, _) in &targets {
+            kill_process_tree(*pid);
+            log::info!("Killed background process {} (pid={:?})", id, pid);
+        }
+
+        let mut processes = self.processes.write().await;
+        for (id, _, script_path) in targets {
+            if let Some(mut proc) = processes.remove(&id) {
+                proc.status = ProcessStatus::Stopped;
+                let _ = proc.child.kill().await;
+            }
+            if !script_path.as_os_str().is_empty() {
+                let _ = tokio::fs::remove_file(&script_path).await;
+            }
+        }
     }
 
     pub async fn status(&self, id: &str) -> PythonResult<BackgroundProcessInfo> {
@@ -281,12 +333,36 @@ impl BackgroundProcessManager {
             id: proc.id.clone(),
             label: proc.label.clone(),
             status: proc.status.clone(),
-            pid: proc.child.id(),
+            pid: proc.pid.or_else(|| proc.child.id()),
             started_at: proc.started_at,
             exit_code: proc.exit_code,
             stdout_tail: proc.stdout.read().await.clone(),
             stderr_tail: proc.stderr.read().await.clone(),
         }
+    }
+}
+
+/// Force-kill a process and its children by PID.
+fn kill_process_tree(pid: Option<u32>) {
+    let Some(pid) = pid else {
+        return;
+    };
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
     }
 }
 

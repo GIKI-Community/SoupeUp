@@ -1,5 +1,4 @@
 use crate::core::{mock_activity, mock_system_info, mock_system_status, ActivityEntry, SystemInfo, SystemStatus};
-use crate::jobs::{mock_jobs};
 use crate::logging::{mock_logs, LogEntry};
 use crate::metrics::{mock_metrics, MetricsSnapshot};
 use crate::nodes::{mock_nodes};
@@ -27,13 +26,21 @@ pub fn get_activity() -> Vec<ActivityEntry> {
 }
 
 #[tauri::command]
-pub fn get_nodes() -> Vec<crate::nodes::Node> {
-    mock_nodes()
+pub async fn get_nodes(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<crate::nodes::Node>, String> {
+    let lock = state.dask_service.read().await;
+    if let Some(svc) = lock.as_ref() {
+        if let Ok(snap) = svc.cluster_snapshot().await {
+            return Ok(crate::nodes::nodes_from_dask_snapshot(&snap));
+        }
+    }
+    Ok(mock_nodes())
 }
 
 #[tauri::command]
-pub fn get_jobs() -> Vec<crate::jobs::Job> {
-    mock_jobs()
+pub async fn get_jobs(state: tauri::State<'_, crate::AppState>) -> Result<Vec<crate::jobs::Job>, String> {
+    Ok(state.job_history.list().await)
 }
 
 #[tauri::command]
@@ -473,10 +480,38 @@ pub async fn dask_run_example(
     state: tauri::State<'_, crate::AppState>,
     example_id: String,
 ) -> Result<crate::dask::ExampleJobResult, String> {
-    let svc = dask_service!(state);
-    svc.run_example(example_id)
-        .await
-        .map_err(|e| e.to_string())
+    let svc = {
+        let lock = state.dask_service.read().await;
+        lock.as_ref().cloned()
+    };
+    let Some(svc) = svc else {
+        return Ok(crate::dask::example_failure(
+            &example_id,
+            "Dask Scheduler Plugin is still initializing. Ensure the Python Runtime is ready."
+                .into(),
+        ));
+    };
+
+    let title = crate::dask::examples::get(&example_id)
+        .map(|spec| spec.title.to_string())
+        .unwrap_or_else(|| example_id.clone());
+
+    let job_id = state
+        .job_history
+        .begin(&title, "dask-example")
+        .await;
+
+    let result = match svc.run_example(example_id.clone()).await {
+        Ok(result) => result,
+        Err(e) => crate::dask::example_failure(&example_id, e.to_string()),
+    };
+
+    state
+        .job_history
+        .finish(&job_id, result.success, result.execution_time_ms)
+        .await;
+
+    Ok(result)
 }
 
 #[tauri::command]

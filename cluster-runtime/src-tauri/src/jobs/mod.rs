@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+pub mod history;
+
+pub use history::JobHistory;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
@@ -23,6 +27,5 @@ pub struct Job {
 }
 
 pub fn mock_jobs() -> Vec<Job> {
-    // TODO: Get real jobs from runtime job scheduler
     Vec::new()
 }

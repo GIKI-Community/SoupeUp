@@ -232,6 +232,10 @@ try:
     started = time.time()
     with Client(ADDRESS, timeout="10s") as client:
         workers = len(client.scheduler_info().get("workers", {{}}))
+        if workers == 0:
+            raise RuntimeError(
+                "No Dask workers connected. Start at least one worker on the Cluster page."
+            )
         fut = client.submit(user_fn, *ARGS)
         result = fut.result(timeout=600)
         elapsed_ms = int((time.time() - started) * 1000)
@@ -248,6 +252,64 @@ except Exception as exc:
         scheduler_address = scheduler_address,
         args_json = args_json,
         function_body = function_body,
+    )
+}
+
+fn indent_body(body: &str) -> String {
+    body.replace('\r', "")
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                format!("        {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+const ORCHESTRATION_PREAMBLE: &str = r#"
+        workers = len(client.scheduler_info().get("workers", {}))
+        if workers == 0:
+            raise RuntimeError(
+                "No Dask workers connected. Start at least one worker on the Cluster page."
+            )
+"#;
+
+/// Run orchestration code in the client process (uses `client` + `ARGS`, sets `result`).
+/// Use this for multi-step distributed jobs — not `client.submit` of a function that calls `get_client()`.
+pub fn orchestration_script(scheduler_address: &str, body: &str, args_json: &str) -> String {
+    let indented_body = indent_body(body);
+    format!(
+        r#"
+import json
+import time
+import sys
+from distributed import Client
+
+ADDRESS = {scheduler_address:?}
+ARGS = json.loads({args_json:?})
+
+try:
+    started = time.time()
+    with Client(ADDRESS, timeout="10s") as client:
+{orchestration_preamble}{indented_body}
+        elapsed_ms = int((time.time() - started) * 1000)
+        print(json.dumps({{
+            "ok": True,
+            "result": result,
+            "executionTimeMs": elapsed_ms,
+            "workersUsed": workers,
+        }}, default=str))
+except Exception as exc:
+    print(json.dumps({{"ok": False, "error": str(exc)}}))
+    sys.exit(1)
+"#,
+        scheduler_address = scheduler_address,
+        args_json = args_json,
+        orchestration_preamble = ORCHESTRATION_PREAMBLE,
+        indented_body = indented_body,
     )
 }
 
@@ -269,6 +331,10 @@ try:
     started = time.time()
     with Client(ADDRESS, timeout="10s") as client:
         workers = len(client.scheduler_info().get("workers", {{}}))
+        if workers == 0:
+            raise RuntimeError(
+                "No Dask workers connected. Start at least one worker on the Cluster page."
+            )
         futures = client.map(user_fn, ITEMS)
         result = client.gather(futures)
         elapsed_ms = int((time.time() - started) * 1000)

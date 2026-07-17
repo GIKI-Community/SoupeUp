@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import {
   Area,
   AreaChart,
@@ -25,6 +24,7 @@ function MetricChart({
   color: string;
   domain?: [number, number];
 }) {
+  const chartId = series.name.replace(/[^a-zA-Z0-9_-]/g, "-").toLowerCase();
   const data = series.points.map((point) => ({
     time: new Date(point.timestamp).toLocaleTimeString([], {
       hour: "2-digit",
@@ -34,11 +34,19 @@ function MetricChart({
     value: Math.round(point.value * 10) / 10,
   }));
 
+  if (data.length === 0) {
+    return (
+      <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+        Waiting for metrics…
+      </div>
+    );
+  }
+
   return (
     <ResponsiveContainer width="100%" height={220}>
       <AreaChart data={data}>
         <defs>
-          <linearGradient id={`gradient-${series.name}`} x1="0" y1="0" x2="0" y2="1">
+          <linearGradient id={`gradient-${chartId}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="5%" stopColor={color} stopOpacity={0.3} />
             <stop offset="95%" stopColor={color} stopOpacity={0} />
           </linearGradient>
@@ -49,6 +57,7 @@ function MetricChart({
           tick={{ fontSize: 11, fill: "oklch(0.65 0.02 260)" }}
           tickLine={false}
           axisLine={false}
+          minTickGap={24}
         />
         <YAxis
           domain={domain ?? ["auto", "auto"]}
@@ -70,10 +79,10 @@ function MetricChart({
           type="monotone"
           dataKey="value"
           stroke={color}
-          fill={`url(#gradient-${series.name})`}
+          fill={`url(#gradient-${chartId})`}
           strokeWidth={2}
-          isAnimationActive
-          animationDuration={300}
+          dot={false}
+          isAnimationActive={false}
         />
       </AreaChart>
     </ResponsiveContainer>
@@ -81,18 +90,8 @@ function MetricChart({
 }
 
 export function MetricsPage() {
-  const { snapshot, fetchMetrics, appendAnimatedPoint } = useMetricsStore();
-  const { metrics: daskMetrics, fetchMetrics: fetchDaskMetrics } = useDaskStore();
-
-  useEffect(() => {
-    void fetchMetrics();
-    void fetchDaskMetrics();
-    const interval = setInterval(() => {
-      appendAnimatedPoint();
-      void fetchDaskMetrics();
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [fetchMetrics, appendAnimatedPoint, fetchDaskMetrics]);
+  const { snapshot } = useMetricsStore();
+  const { metrics: daskMetrics } = useDaskStore();
 
   if (!snapshot) {
     return (

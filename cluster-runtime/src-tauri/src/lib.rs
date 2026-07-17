@@ -27,6 +27,7 @@ pub mod runtime;
 use std::sync::Arc;
 use dask::DaskService;
 use events::EventBus;
+use jobs::JobHistory;
 use plugin_registry::PluginRegistry;
 use python_runtime::PythonExecutionService;
 
@@ -37,6 +38,8 @@ pub struct AppState {
     pub python_service: Arc<tokio::sync::RwLock<Option<Arc<PythonExecutionService>>>>,
     /// The Dask Scheduler service. `None` until Python is ready and packages are installed.
     pub dask_service: Arc<tokio::sync::RwLock<Option<Arc<DaskService>>>>,
+    /// Recent and in-flight jobs shown on the Jobs page.
+    pub job_history: Arc<JobHistory>,
 }
 
 impl AppState {
@@ -46,6 +49,7 @@ impl AppState {
             event_bus: Arc::new(EventBus::default()),
             python_service: Arc::new(tokio::sync::RwLock::new(None)),
             dask_service: Arc::new(tokio::sync::RwLock::new(None)),
+            job_history: Arc::new(JobHistory::new()),
         }
     }
 }
@@ -54,6 +58,18 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new()
     }
+}
+
+async fn shutdown_services(state: &AppState) {
+    log::info!("App exit: stopping background services...");
+
+    if let Some(dask) = state.dask_service.read().await.clone() {
+        dask.shutdown().await;
+    } else if let Some(python) = state.python_service.read().await.clone() {
+        python.shutdown().await;
+    }
+
+    log::info!("App exit: background services stopped.");
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -221,6 +237,12 @@ pub fn run() {
             commands::dask_run_example,
             commands::dask_cancel_job,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let state = app_handle.state::<AppState>();
+                tauri::async_runtime::block_on(shutdown_services(state.inner()));
+            }
+        });
 }

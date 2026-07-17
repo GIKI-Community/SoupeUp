@@ -40,7 +40,7 @@ export function JobsPage() {
 
   useEffect(() => {
     void fetchJobs();
-    const refreshInterval = setInterval(() => void fetchJobs(), 60000);
+    const refreshInterval = setInterval(() => void fetchJobs(), 2000);
     const tickInterval = setInterval(() => tickRunningJobs(), 1000);
     return () => {
       clearInterval(refreshInterval);
@@ -138,7 +138,17 @@ export function JobsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredJobs.map((job) => (
+            {filteredJobs.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columns.length}
+                  className="py-8 text-center text-sm text-muted-foreground"
+                >
+                  No jobs yet. Run an example from the Cluster page to see it here.
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredJobs.map((job) => (
               <TableRow key={job.id}>
                 <TableCell className="font-mono text-xs">{job.id}</TableCell>
                 <TableCell>
@@ -151,7 +161,8 @@ export function JobsPage() {
                 <TableCell className="font-mono text-xs">{job.runtime}</TableCell>
                 <TableCell>{formatDuration(job.durationSecs)}</TableCell>
               </TableRow>
-            ))}
+              ))
+            )}
           </TableBody>
         </Table>
       </div>

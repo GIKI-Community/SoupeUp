@@ -271,36 +271,48 @@ export interface ExampleJobResult {
   error: string | null;
 }
 
+export function exampleErrorMessage(result: ExampleJobResult): string {
+  if (result.error?.trim()) return result.error;
+  if (result.resultSummary?.trim()) return result.resultSummary;
+  return "Example job failed with no error details.";
+}
+
 export const DASK_EXAMPLES = [
   {
     id: "mandelbrot",
     title: "Mandelbrot Renderer",
     description: "Distribute fractal row rendering across workers.",
+    packages: ["numpy"],
   },
   {
     id: "monte_carlo_pi",
     title: "Monte Carlo π Estimation",
     description: "Estimate π with parallel random sampling.",
+    packages: [] as string[],
   },
   {
     id: "matrix_multiply",
     title: "Matrix Multiplication",
     description: "Parallel block matrix multiplications.",
+    packages: ["numpy"],
   },
   {
     id: "prime_search",
     title: "Prime Number Search",
     description: "Search primes up to a limit across the cluster.",
+    packages: [] as string[],
   },
   {
     id: "image_blur",
     title: "Image Blur",
     description: "Synthetic image row blur distributed by row.",
+    packages: ["numpy"],
   },
   {
     id: "word_count",
     title: "Word Count",
     description: "Classic map-reduce word count over text lines.",
+    packages: [] as string[],
   },
 ] as const;
 
