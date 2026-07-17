@@ -3,6 +3,16 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Tauri
+target/
+.target/
+.tauri/
+.tauri-dist/
+.tauri-dist-tmp/
+.tauri-dist-tmp-*/
+.tauri-dist-tmp-*/
+
+
 # C extensions
 *.so
 
