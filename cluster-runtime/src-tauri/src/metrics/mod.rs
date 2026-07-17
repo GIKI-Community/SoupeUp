@@ -49,12 +49,28 @@ fn generate_series(name: &str, unit: &str, base: f64, variance: f64, count: usiz
 }
 
 pub fn mock_metrics() -> MetricsSnapshot {
-    let mut rng = rand::thread_rng();
+    // TODO: Get real metrics from metrics system
     MetricsSnapshot {
-        cpu: generate_series("CPU", "%", 42.0 + rng.gen_range(-5.0..5.0), 8.0, 30),
-        memory: generate_series("Memory", "%", 58.0 + rng.gen_range(-3.0..3.0), 5.0, 30),
-        network: generate_series("Network", "MB/s", 125.0 + rng.gen_range(-20.0..20.0), 30.0, 30),
-        disk: generate_series("Disk I/O", "MB/s", 45.0 + rng.gen_range(-10.0..10.0), 15.0, 30),
+        cpu: MetricSeries {
+            name: "CPU".to_string(),
+            unit: "%".to_string(),
+            points: Vec::new(),
+        },
+        memory: MetricSeries {
+            name: "Memory".to_string(),
+            unit: "%".to_string(),
+            points: Vec::new(),
+        },
+        network: MetricSeries {
+            name: "Network".to_string(),
+            unit: "MB/s".to_string(),
+            points: Vec::new(),
+        },
+        disk: MetricSeries {
+            name: "Disk I/O".to_string(),
+            unit: "MB/s".to_string(),
+            points: Vec::new(),
+        },
         collected_at: Utc::now(),
     }
 }

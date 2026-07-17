@@ -9,10 +9,12 @@ import {
   YAxis,
 } from "recharts";
 
+import { StatCard } from "@/components/stat-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHeader } from "@/layouts/app-layout";
-import { useMetricsStore } from "@/stores";
+import { useDaskStore, useMetricsStore } from "@/stores";
 import type { MetricSeries } from "@/types";
+import { Activity, Cpu, HardDrive, Network, Zap } from "lucide-react";
 
 function MetricChart({
   series,
@@ -80,14 +82,17 @@ function MetricChart({
 
 export function MetricsPage() {
   const { snapshot, fetchMetrics, appendAnimatedPoint } = useMetricsStore();
+  const { metrics: daskMetrics, fetchMetrics: fetchDaskMetrics } = useDaskStore();
 
   useEffect(() => {
     void fetchMetrics();
+    void fetchDaskMetrics();
     const interval = setInterval(() => {
       appendAnimatedPoint();
+      void fetchDaskMetrics();
     }, 2000);
     return () => clearInterval(interval);
-  }, [fetchMetrics, appendAnimatedPoint]);
+  }, [fetchMetrics, appendAnimatedPoint, fetchDaskMetrics]);
 
   if (!snapshot) {
     return (
@@ -111,6 +116,36 @@ export function MetricsPage() {
         title="Metrics"
         description="Real-time cluster performance monitoring"
       />
+
+      <div className="mb-6">
+        <h2 className="mb-3 text-sm font-medium text-muted-foreground">
+          Dask Cluster
+        </h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <StatCard
+            title="Worker CPU"
+            value={`${(daskMetrics?.workerCpu ?? 0).toFixed(1)}%`}
+            icon={Cpu}
+          />
+          <StatCard
+            title="Worker Memory"
+            value={`${(daskMetrics?.workerMemory ?? 0).toFixed(1)}%`}
+            icon={HardDrive}
+          />
+          <StatCard
+            title="Worker Load"
+            value={`${(daskMetrics?.workerLoad ?? 0).toFixed(1)}%`}
+            subtitle={`${daskMetrics?.workerCount ?? 0} workers`}
+            icon={Activity}
+          />
+          <StatCard
+            title="Data Transfer"
+            value={`${(daskMetrics?.dataTransfer ?? 0).toFixed(0)} B/s`}
+            subtitle={`${(daskMetrics?.tasksPerSec ?? 0).toFixed(1)} tasks/s`}
+            icon={daskMetrics ? Network : Zap}
+          />
+        </div>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {charts.map(({ series, color, domain }) => (

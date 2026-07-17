@@ -35,7 +35,14 @@ export interface Job {
   durationSecs: number;
 }
 
-export type PluginStatus = "enabled" | "disabled" | "error" | "updating";
+export type PluginStatus =
+  | "discovered"
+  | "validated"
+  | "loaded"
+  | "initializing"
+  | "running"
+  | "error"
+  | "disabled";
 
 export interface Plugin {
   id: string;
@@ -44,6 +51,43 @@ export interface Plugin {
   status: PluginStatus;
   author: string;
   description: string;
+  capabilities?: string[];
+  pluginType?: string;
+}
+
+// ─── Python Runtime ───────────────────────────────────────────────────────────
+
+export interface ExecutionResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  executionTimeMs: number;
+  returnValue: string | null;
+  exception: string | null;
+  success: boolean;
+}
+
+export interface PackageInfo {
+  name: string;
+  version: string;
+  location: string;
+}
+
+export interface EnvironmentInfo {
+  name: string;
+  path: string;
+  pythonVersion: string | null;
+  packageCount: number;
+  active: boolean;
+}
+
+export interface PythonRuntimeHealth {
+  status: "ready" | "initializing" | "degraded" | "failed";
+  pythonVersion: string | null;
+  activeEnvironment: string | null;
+  environmentPath: string | null;
+  interpreterPath: string | null;
+  isBundled: boolean;
 }
 
 export interface MetricPoint {
@@ -115,3 +159,148 @@ export interface AppSettings {
   authEnabled: boolean;
   tlsEnabled: boolean;
 }
+
+// ─── Dask Scheduler Plugin ────────────────────────────────────────────────────
+
+export type ComponentStatus =
+  | "stopped"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "error"
+  | "unknown";
+
+export type ClusterHealth = "healthy" | "degraded" | "unhealthy" | "unknown";
+
+export interface SchedulerInfo {
+  status: ComponentStatus;
+  address: string | null;
+  dashboardUrl: string | null;
+  processId: string | null;
+  host: string;
+  port: number;
+  dashboardPort: number;
+  startedAt: string | null;
+  error: string | null;
+  logs: string;
+}
+
+export interface WorkerInfo {
+  status: ComponentStatus;
+  name: string;
+  schedulerAddress: string;
+  processId: string | null;
+  nthreads: number;
+  memoryLimit: string | null;
+  startedAt: string | null;
+  error: string | null;
+  logs: string;
+}
+
+export interface ConnectedWorker {
+  id: string;
+  name: string;
+  address: string;
+  nthreads: number;
+  memoryLimit: number;
+  memoryUsed: number;
+  cpu: number;
+  status: string;
+}
+
+export interface ClusterSnapshot {
+  health: ClusterHealth;
+  scheduler: SchedulerInfo;
+  localWorker: WorkerInfo;
+  workers: ConnectedWorker[];
+  totalCores: number;
+  totalMemory: number;
+  activeTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  bandwidthBytesPerSec: number;
+  clientConnected: boolean;
+  updatedAt: string | null;
+}
+
+export interface DaskSettings {
+  schedulerHost: string;
+  schedulerPort: number;
+  dashboardPort: number;
+  schedulerAddress: string;
+  workerThreads: number;
+  workerMemoryLimit: string;
+  workerName: string;
+  localDirectory: string;
+  loggingLevel: string;
+}
+
+export interface DashboardTab {
+  id: string;
+  label: string;
+  path: string;
+  url: string;
+}
+
+export interface DashboardView {
+  baseUrl: string;
+  tabs: DashboardTab[];
+}
+
+export interface DaskMetrics {
+  schedulerCpu: number;
+  schedulerMemory: number;
+  workerCpu: number;
+  workerMemory: number;
+  tasksPerSec: number;
+  dataTransfer: number;
+  workerLoad: number;
+  workerCount: number;
+}
+
+export interface ExampleJobResult {
+  exampleId: string;
+  title: string;
+  success: boolean;
+  executionTimeMs: number;
+  workersUsed: number;
+  cpuUtilization: number | null;
+  speedup: number | null;
+  resultSummary: string;
+  details: unknown;
+  error: string | null;
+}
+
+export const DASK_EXAMPLES = [
+  {
+    id: "mandelbrot",
+    title: "Mandelbrot Renderer",
+    description: "Distribute fractal row rendering across workers.",
+  },
+  {
+    id: "monte_carlo_pi",
+    title: "Monte Carlo π Estimation",
+    description: "Estimate π with parallel random sampling.",
+  },
+  {
+    id: "matrix_multiply",
+    title: "Matrix Multiplication",
+    description: "Parallel block matrix multiplications.",
+  },
+  {
+    id: "prime_search",
+    title: "Prime Number Search",
+    description: "Search primes up to a limit across the cluster.",
+  },
+  {
+    id: "image_blur",
+    title: "Image Blur",
+    description: "Synthetic image row blur distributed by row.",
+  },
+  {
+    id: "word_count",
+    title: "Word Count",
+    description: "Classic map-reduce word count over text lines.",
+  },
+] as const;
+

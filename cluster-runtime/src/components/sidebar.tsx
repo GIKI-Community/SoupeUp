@@ -4,6 +4,7 @@ import {
   Cpu,
   FileText,
   LayoutDashboard,
+  Network,
   Puzzle,
   ScrollText,
   Server,
@@ -15,6 +16,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/cluster", label: "Cluster", icon: Network },
   { to: "/compute", label: "Compute", icon: Server },
   { to: "/nodes", label: "Nodes", icon: Server },
   { to: "/jobs", label: "Jobs", icon: Box },

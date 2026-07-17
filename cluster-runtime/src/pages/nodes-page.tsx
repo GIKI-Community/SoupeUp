@@ -47,6 +47,7 @@ const sortableColumns: { key: keyof Node; label: string }[] = [
 export function NodesPage() {
   const {
     nodes,
+    summary,
     search,
     statusFilter,
     sortField,
@@ -55,11 +56,13 @@ export function NodesPage() {
     setStatusFilter,
     setSort,
     fetchNodes,
+    fetchSummary,
   } = useNodesStore();
 
   useEffect(() => {
     void fetchNodes();
-  }, [fetchNodes]);
+    void fetchSummary();
+  }, [fetchNodes, fetchSummary]);
 
   const filteredNodes = useMemo(() => {
     return nodes
@@ -93,6 +96,40 @@ export function NodesPage() {
         title="Nodes"
         description="Manage compute nodes across your cluster"
       />
+
+      {/* Cluster Summary Cards */}
+      {summary && (
+        <div className="mb-6 grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-7">
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold">{summary.total_nodes}</div>
+            <div className="text-xs text-muted-foreground">Total Nodes</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold text-green-500">{summary.online_nodes}</div>
+            <div className="text-xs text-muted-foreground">Online</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold">{summary.total_cpus}</div>
+            <div className="text-xs text-muted-foreground">Total CPUs</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold">{(summary.total_ram / (1024 * 1024 * 1024)).toFixed(1)} GB</div>
+            <div className="text-xs text-muted-foreground">Total RAM</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold">{summary.total_gpus}</div>
+            <div className="text-xs text-muted-foreground">Total GPUs</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold">{summary.total_workers}</div>
+            <div className="text-xs text-muted-foreground">Total Workers</div>
+          </div>
+          <div className="rounded-lg border border-border/60 bg-card/80 p-4 text-center">
+            <div className="text-2xl font-bold text-blue-500">{summary.total_available_compute.toFixed(0)}%</div>
+            <div className="text-xs text-muted-foreground">Available Compute</div>
+          </div>
+        </div>
+      )}
 
       <div className="mb-6 flex flex-col gap-4 sm:flex-row">
         <div className="relative flex-1">

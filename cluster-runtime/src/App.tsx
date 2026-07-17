@@ -1,6 +1,7 @@
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { AppLayout } from "./layouts/app-layout";
+import { ClusterPage } from "./pages/cluster-page";
 import { ComputePage } from "./pages/compute-page";
 import { DashboardPage } from "./pages/dashboard-page";
 import { JobsPage } from "./pages/jobs-page";
@@ -16,6 +17,7 @@ export default function App() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/cluster" element={<ClusterPage />} />
           <Route path="/compute" element={<ComputePage />} />
           <Route path="/nodes" element={<NodesPage />} />
           <Route path="/jobs" element={<JobsPage />} />

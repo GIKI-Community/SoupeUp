@@ -25,12 +25,15 @@ const jobStatusVariant: Record<
 
 const pluginStatusVariant: Record<
   PluginStatus,
-  "success" | "destructive" | "warning" | "muted"
+  "success" | "destructive" | "warning" | "muted" | "default"
 > = {
-  enabled: "success",
-  disabled: "muted",
+  discovered: "muted",
+  validated: "muted",
+  loaded: "default",
+  initializing: "warning",
+  running: "success",
   error: "destructive",
-  updating: "warning",
+  disabled: "muted",
 };
 
 const serviceStatusVariant: Record<
