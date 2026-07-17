@@ -12,6 +12,9 @@ target/
 .tauri-dist-tmp-*/
 .tauri-dist-tmp-*/
 
+temp/
+
+venv*
 
 # C extensions
 *.so
