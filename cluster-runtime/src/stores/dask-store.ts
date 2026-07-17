@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-import { DaskApi } from "@/api";
+import { DaskApi, JobApi, SchedulerApi } from "@/api";
 import {
   DASK_EXAMPLES,
   exampleErrorMessage,
@@ -256,7 +256,21 @@ export const useDaskStore = create<DaskState>((set, get) => ({
       DASK_EXAMPLES.find((ex) => ex.id === exampleId)?.title ?? exampleId;
     set({ isRunningExample: true, error: null, lastExample: null });
     try {
-      const lastExample = await DaskApi.runExample(exampleId);
+      await SchedulerApi.setActive("plugin-dask-scheduler");
+      const ack = await JobApi.submitExample(exampleId, title);
+      const result = await JobApi.result(ack.jobId);
+      const lastExample: ExampleJobResult = {
+        exampleId,
+        title,
+        success: result.status === "completed",
+        executionTimeMs: result.metrics.executionTimeMs,
+        workersUsed: result.metrics.workersUsed,
+        cpuUtilization: result.metrics.cpuUtilization ?? null,
+        speedup: result.metrics.speedup ?? null,
+        resultSummary: result.resultSummary ?? "",
+        details: result.output ?? null,
+        error: result.errors[0] ?? null,
+      };
       const failureMessage = lastExample.success
         ? null
         : exampleErrorMessage(lastExample);
@@ -266,6 +280,7 @@ export const useDaskStore = create<DaskState>((set, get) => ({
         error: failureMessage,
       });
       await get().fetchSnapshot();
+      useJobsStore.getState().fetchJobs();
       return lastExample;
     } catch (error) {
       const message = errMessage(error, "Example job failed");

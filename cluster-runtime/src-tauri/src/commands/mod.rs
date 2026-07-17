@@ -29,46 +29,37 @@ pub fn get_activity() -> Vec<ActivityEntry> {
 pub async fn get_nodes(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<Vec<crate::nodes::Node>, String> {
-    let lock = state.dask_service.read().await;
-    if let Some(svc) = lock.as_ref() {
+    let mut nodes = Vec::new();
+
+    if let Some(svc) = state.dask_service.read().await.as_ref() {
         if let Ok(snap) = svc.cluster_snapshot().await {
-            return Ok(crate::nodes::nodes_from_dask_snapshot(&snap));
+            nodes.extend(crate::nodes::nodes_from_dask_snapshot(&snap));
         }
     }
-    Ok(mock_nodes())
+
+    if let Some(svc) = state.ray_service.read().await.as_ref() {
+        if let Ok(snap) = svc.cluster_snapshot().await {
+            nodes.extend(crate::nodes::nodes_from_ray_snapshot(&snap));
+        }
+    }
+
+    if nodes.is_empty() {
+        Ok(mock_nodes())
+    } else {
+        Ok(nodes)
+    }
 }
 
 #[tauri::command]
 pub async fn get_jobs(state: tauri::State<'_, crate::AppState>) -> Result<Vec<crate::jobs::Job>, String> {
-    Ok(state.job_history.list().await)
+    Ok(state.job_manager.list().await)
 }
 
 #[tauri::command]
 pub async fn get_cluster_summary(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<ClusterSummary, String> {
-    let lock = state.dask_service.read().await;
-    if let Some(svc) = lock.as_ref() {
-        if let Ok(snap) = svc.cluster_snapshot().await {
-            use crate::dask::ComponentStatus;
-            let scheduler_up = snap.scheduler.status == ComponentStatus::Running;
-            return Ok(ClusterSummary {
-                total_nodes: snap.workers.len().max(1),
-                online_nodes: if scheduler_up {
-                    snap.workers.len().max(1)
-                } else {
-                    snap.workers.len()
-                },
-                total_cpus: snap.total_cores,
-                total_ram: snap.total_memory,
-                total_gpus: 0,
-                total_workers: snap.workers.len(),
-                total_available_compute: snap.total_cores as f32,
-            });
-        }
-    }
-
-    Ok(ClusterSummary {
+    let mut summary = ClusterSummary {
         total_nodes: 0,
         online_nodes: 0,
         total_cpus: 0,
@@ -76,7 +67,43 @@ pub async fn get_cluster_summary(
         total_gpus: 0,
         total_workers: 0,
         total_available_compute: 0.0,
-    })
+    };
+
+    if let Some(svc) = state.dask_service.read().await.as_ref() {
+        if let Ok(snap) = svc.cluster_snapshot().await {
+            use crate::dask::ComponentStatus;
+            let scheduler_up = snap.scheduler.status == ComponentStatus::Running;
+            summary.total_nodes += snap.workers.len().max(1);
+            summary.online_nodes += if scheduler_up {
+                snap.workers.len().max(1)
+            } else {
+                snap.workers.len()
+            };
+            summary.total_cpus += snap.total_cores;
+            summary.total_ram += snap.total_memory;
+            summary.total_workers += snap.workers.len();
+            summary.total_available_compute += snap.total_cores as f32;
+        }
+    }
+
+    if let Some(svc) = state.ray_service.read().await.as_ref() {
+        if let Ok(snap) = svc.cluster_snapshot().await {
+            use crate::ray::ComponentStatus;
+            let head_up = snap.head.status == ComponentStatus::Running;
+            summary.total_nodes += snap.workers.len().max(1);
+            summary.online_nodes += if head_up {
+                snap.workers.len().max(1)
+            } else {
+                snap.workers.len()
+            };
+            summary.total_cpus += snap.total_cores;
+            summary.total_ram += snap.total_memory;
+            summary.total_workers += snap.workers.len();
+            summary.total_available_compute += snap.total_cores as f32;
+        }
+    }
+
+    Ok(summary)
 }
 
 #[tauri::command]
@@ -480,38 +507,19 @@ pub async fn dask_run_example(
     state: tauri::State<'_, crate::AppState>,
     example_id: String,
 ) -> Result<crate::dask::ExampleJobResult, String> {
-    let svc = {
-        let lock = state.dask_service.read().await;
-        lock.as_ref().cloned()
-    };
-    let Some(svc) = svc else {
-        return Ok(crate::dask::example_failure(
-            &example_id,
-            "Dask Scheduler Plugin is still initializing. Ensure the Python Runtime is ready."
-                .into(),
-        ));
-    };
+    let _ = state
+        .scheduler_registry
+        .set_active(crate::scheduler::selection::DASK_PLUGIN_ID)
+        .await;
 
-    let title = crate::dask::examples::get(&example_id)
+    let title = crate::jobs::examples::get(&example_id)
         .map(|spec| spec.title.to_string())
         .unwrap_or_else(|| example_id.clone());
 
-    let job_id = state
-        .job_history
-        .begin(&title, "dask-example")
-        .await;
-
-    let result = match svc.run_example(example_id.clone()).await {
-        Ok(result) => result,
-        Err(e) => crate::dask::example_failure(&example_id, e.to_string()),
-    };
-
-    state
-        .job_history
-        .finish(&job_id, result.success, result.execution_time_ms)
-        .await;
-
-    Ok(result)
+    let spec = crate::jobs::JobSpec::example(&title, &example_id);
+    let ack = state.job_manager.submit(spec, "dask-example").await?;
+    let result = state.job_manager.result(&ack.job_id).await?;
+    Ok(example_result_from_job(&example_id, &title, &result))
 }
 
 #[tauri::command]
@@ -566,5 +574,392 @@ pub async fn dask_job_status(
 ) -> Result<serde_json::Value, String> {
     let svc = dask_service!(state);
     svc.job_status(job_id).await.map_err(|e| e.to_string())
+}
+
+// ─── Ray Plugin Commands ──────────────────────────────────────────────────────
+
+macro_rules! ray_service {
+    ($state:expr) => {{
+        let lock = $state.ray_service.read().await;
+        match lock.as_ref() {
+            Some(svc) => std::sync::Arc::clone(svc),
+            None => {
+                return Err(
+                    "Ray Plugin is still initializing. Ensure the Python Runtime is ready."
+                        .to_string(),
+                )
+            }
+        }
+    }};
+}
+
+#[tauri::command]
+pub async fn ray_ensure_packages(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<String>, String> {
+    let svc = ray_service!(state);
+    svc.ensure_packages().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_get_settings(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::settings::RaySettings, String> {
+    let svc = ray_service!(state);
+    Ok(svc.get_settings().await)
+}
+
+#[tauri::command]
+pub async fn ray_update_settings(
+    state: tauri::State<'_, crate::AppState>,
+    settings: crate::ray::settings::RaySettings,
+) -> Result<crate::ray::settings::RaySettings, String> {
+    let svc = ray_service!(state);
+    svc.update_settings(settings)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_start_head(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::HeadInfo, String> {
+    let svc = ray_service!(state);
+    svc.start_head().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_stop_head(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::HeadInfo, String> {
+    let svc = ray_service!(state);
+    svc.stop_head().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_restart_head(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::HeadInfo, String> {
+    let svc = ray_service!(state);
+    svc.restart_head().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_head_status(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::HeadInfo, String> {
+    let svc = ray_service!(state);
+    Ok(svc.head_status().await)
+}
+
+#[tauri::command]
+pub async fn ray_start_worker(
+    state: tauri::State<'_, crate::AppState>,
+    head_address: Option<String>,
+) -> Result<crate::ray::WorkerInfo, String> {
+    let svc = ray_service!(state);
+    svc.start_worker(head_address)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_stop_worker(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::WorkerInfo, String> {
+    let svc = ray_service!(state);
+    svc.stop_worker().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_restart_worker(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::WorkerInfo, String> {
+    let svc = ray_service!(state);
+    svc.restart_worker().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_worker_status(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::WorkerInfo, String> {
+    let svc = ray_service!(state);
+    Ok(svc.worker_status().await)
+}
+
+#[tauri::command]
+pub async fn ray_connect_client(
+    state: tauri::State<'_, crate::AppState>,
+    address: Option<String>,
+) -> Result<String, String> {
+    let svc = ray_service!(state);
+    svc.connect_client(address).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_disconnect_client(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<(), String> {
+    let svc = ray_service!(state);
+    svc.disconnect_client().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_cluster_snapshot(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::ClusterSnapshot, String> {
+    let svc = ray_service!(state);
+    svc.cluster_snapshot().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_cluster_info(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<serde_json::Value, String> {
+    let svc = ray_service!(state);
+    svc.cluster_info().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_dashboard(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::dashboard::DashboardView, String> {
+    let svc = ray_service!(state);
+    Ok(svc.dashboard().await)
+}
+
+#[tauri::command]
+pub async fn ray_metrics(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::ray::monitoring::RayMetrics, String> {
+    let svc = ray_service!(state);
+    svc.metrics().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_submit_python_function(
+    state: tauri::State<'_, crate::AppState>,
+    function_body: String,
+    args: serde_json::Value,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.submit_python_function(function_body, args)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_map(
+    state: tauri::State<'_, crate::AppState>,
+    function_body: String,
+    items: serde_json::Value,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.map(function_body, items)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_run_example(
+    state: tauri::State<'_, crate::AppState>,
+    example_id: String,
+) -> Result<crate::ray::ExampleJobResult, String> {
+    let _ = state
+        .scheduler_registry
+        .set_active(crate::scheduler::selection::RAY_PLUGIN_ID)
+        .await;
+
+    let title = crate::jobs::examples::get(&example_id)
+        .map(|spec| spec.title.to_string())
+        .unwrap_or_else(|| example_id.clone());
+
+    let spec = crate::jobs::JobSpec::example(&title, &example_id);
+    let ack = state.job_manager.submit(spec, "ray-example").await?;
+    let result = state.job_manager.result(&ack.job_id).await?;
+    Ok(example_result_from_job_ray(&example_id, &title, &result))
+}
+
+#[tauri::command]
+pub async fn ray_cancel_job(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<(), String> {
+    let svc = ray_service!(state);
+    svc.cancel_job(job_id).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_submit_script(
+    state: tauri::State<'_, crate::AppState>,
+    script: String,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.submit_script(script).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_submit_module(
+    state: tauri::State<'_, crate::AppState>,
+    module: String,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.submit_module(module).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_scatter(
+    state: tauri::State<'_, crate::AppState>,
+    data: serde_json::Value,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.scatter(data).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_gather(
+    state: tauri::State<'_, crate::AppState>,
+    keys: serde_json::Value,
+) -> Result<crate::ray::JobResult, String> {
+    let svc = ray_service!(state);
+    svc.gather(keys).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn ray_job_status(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<serde_json::Value, String> {
+    let svc = ray_service!(state);
+    svc.job_status(job_id).await.map_err(|e| e.to_string())
+}
+
+// ─── Unified Job API ──────────────────────────────────────────────────────────
+
+fn example_result_from_job(
+    example_id: &str,
+    title: &str,
+    result: &crate::jobs::JobResult,
+) -> crate::dask::ExampleJobResult {
+    crate::dask::ExampleJobResult {
+        example_id: example_id.to_string(),
+        title: title.to_string(),
+        success: result.status == crate::jobs::JobStatus::Completed,
+        execution_time_ms: result.metrics.execution_time_ms,
+        workers_used: result.metrics.workers_used,
+        cpu_utilization: result.metrics.cpu_utilization,
+        speedup: result.metrics.speedup,
+        result_summary: result.result_summary.clone().unwrap_or_default(),
+        details: result.output.clone(),
+        error: result.errors.first().cloned(),
+    }
+}
+
+fn example_result_from_job_ray(
+    example_id: &str,
+    title: &str,
+    result: &crate::jobs::JobResult,
+) -> crate::ray::ExampleJobResult {
+    crate::ray::ExampleJobResult {
+        example_id: example_id.to_string(),
+        title: title.to_string(),
+        success: result.status == crate::jobs::JobStatus::Completed,
+        execution_time_ms: result.metrics.execution_time_ms,
+        workers_used: result.metrics.workers_used,
+        cpu_utilization: result.metrics.cpu_utilization,
+        speedup: result.metrics.speedup,
+        result_summary: result.result_summary.clone().unwrap_or_default(),
+        details: result.output.clone(),
+        error: result.errors.first().cloned(),
+    }
+}
+
+#[tauri::command]
+pub async fn job_submit(
+    state: tauri::State<'_, crate::AppState>,
+    spec: crate::jobs::JobSpec,
+    owner: Option<String>,
+) -> Result<crate::jobs::SubmitAck, String> {
+    state
+        .job_api
+        .submit(spec, owner.as_deref().unwrap_or("user"))
+        .await
+}
+
+#[tauri::command]
+pub async fn job_cancel(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<(), String> {
+    state.job_api.cancel(&job_id).await
+}
+
+#[tauri::command]
+pub async fn job_status(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<crate::jobs::JobStatus, String> {
+    state.job_api.status(&job_id).await
+}
+
+#[tauri::command]
+pub async fn job_progress(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<crate::jobs::JobProgress, String> {
+    state.job_api.progress(&job_id).await
+}
+
+#[tauri::command]
+pub async fn job_result(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<crate::jobs::JobResult, String> {
+    state.job_api.result(&job_id).await
+}
+
+#[tauri::command]
+pub async fn job_list(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<crate::jobs::Job>, String> {
+    Ok(state.job_api.list().await)
+}
+
+#[tauri::command]
+pub async fn job_get(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<crate::jobs::JobDetail, String> {
+    state.job_api.get(&job_id).await
+}
+
+#[tauri::command]
+pub async fn job_retry(
+    state: tauri::State<'_, crate::AppState>,
+    job_id: String,
+) -> Result<crate::jobs::SubmitAck, String> {
+    state.job_api.retry(&job_id).await
+}
+
+#[tauri::command]
+pub async fn scheduler_list(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<crate::jobs::SchedulerListEntry>, String> {
+    Ok(state.job_api.scheduler_list().await)
+}
+
+#[tauri::command]
+pub async fn scheduler_get_active(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<String, String> {
+    Ok(state.job_api.scheduler_get_active().await)
+}
+
+#[tauri::command]
+pub async fn scheduler_set_active(
+    state: tauri::State<'_, crate::AppState>,
+    plugin_id: String,
+) -> Result<(), String> {
+    state.job_api.scheduler_set_active(&plugin_id).await
 }
 

@@ -16,7 +16,9 @@ const jobStatusVariant: Record<
   JobStatus,
   "success" | "destructive" | "warning" | "muted" | "default"
 > = {
-  pending: "muted",
+  created: "muted",
+  queued: "muted",
+  scheduling: "warning",
   running: "default",
   completed: "success",
   failed: "destructive",

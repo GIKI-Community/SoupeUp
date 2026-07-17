@@ -14,8 +14,64 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { useDaskStore, usePythonRuntimeStore } from "@/stores";
-import type { DaskSettings } from "@/types";
+import { useDaskStore, useJobsStore, usePythonRuntimeStore, useRayStore } from "@/stores";
+import type { DaskSettings, RaySettings } from "@/types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+function DefaultSchedulerSettings() {
+  const {
+    activeScheduler,
+    fetchActiveScheduler,
+    setActiveScheduler,
+  } = useJobsStore();
+  const [schedulers, setSchedulers] = useState<
+    { pluginId: string; displayName: string }[]
+  >([]);
+
+  useEffect(() => {
+    void fetchActiveScheduler();
+    void import("@/api").then(({ SchedulerApi }) =>
+      SchedulerApi.list().then((list) =>
+        setSchedulers(
+          list.map((s) => ({
+            pluginId: s.pluginId,
+            displayName: s.displayName,
+          })),
+        ),
+      ),
+    );
+  }, [fetchActiveScheduler]);
+
+  return (
+    <div className="space-y-2">
+      <Label>Default Scheduler</Label>
+      <Select
+        value={activeScheduler ?? undefined}
+        onValueChange={(v) => void setActiveScheduler(v)}
+      >
+        <SelectTrigger className="max-w-md bg-background">
+          <SelectValue placeholder="Select scheduler" />
+        </SelectTrigger>
+        <SelectContent>
+          {schedulers.map((s) => (
+            <SelectItem key={s.pluginId} value={s.pluginId}>
+              {s.displayName}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <p className="text-xs text-muted-foreground">
+        Jobs submitted through the platform API use this scheduler unless overridden.
+      </p>
+    </div>
+  );
+}
 
 function DaskSchedulerSettings() {
   const { settings, isBusy, error, fetchSettings, saveSettings } = useDaskStore();
@@ -147,6 +203,128 @@ function DaskSchedulerSettings() {
   );
 }
 
+function RaySchedulerSettings() {
+  const { settings, isBusy, error, fetchSettings, saveSettings } = useRayStore();
+  const [draft, setDraft] = useState<RaySettings | null>(null);
+
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
+
+  useEffect(() => {
+    if (settings) setDraft(settings);
+  }, [settings]);
+
+  if (!draft) {
+    return (
+      <Card className="bg-card/50 border-border/60 shadow-sm">
+        <CardHeader>
+          <CardTitle>Ray</CardTitle>
+          <CardDescription>Loading settings…</CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  const update = <K extends keyof RaySettings>(key: K, value: RaySettings[K]) => {
+    setDraft({ ...draft, [key]: value });
+  };
+
+  return (
+    <Card className="bg-card/50 border-border/60 shadow-sm">
+      <CardHeader>
+        <CardTitle>Ray</CardTitle>
+        <CardDescription>
+          Configure Ray head bind address, dashboard port, and worker defaults.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {error && (
+          <p className="text-sm text-destructive">{error}</p>
+        )}
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Head Host</Label>
+            <Input
+              value={draft.headHost}
+              onChange={(e) => update("headHost", e.target.value)}
+              className="bg-background font-mono text-xs"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>GCS Port</Label>
+            <Input
+              type="number"
+              value={draft.gcsPort}
+              onChange={(e) => update("gcsPort", Number(e.target.value))}
+              className="bg-background"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Dashboard Port</Label>
+            <Input
+              type="number"
+              value={draft.dashboardPort}
+              onChange={(e) => update("dashboardPort", Number(e.target.value))}
+              className="bg-background"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Head Address (workers join this)</Label>
+            <Input
+              value={draft.headAddress}
+              onChange={(e) => update("headAddress", e.target.value)}
+              className="bg-background font-mono text-xs"
+              placeholder="192.168.1.10:6379"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Worker CPUs (0 = auto)</Label>
+            <Input
+              type="number"
+              value={draft.workerCpus}
+              onChange={(e) => update("workerCpus", Number(e.target.value))}
+              className="bg-background"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Object Store Memory</Label>
+            <Input
+              value={draft.objectStoreMemory}
+              onChange={(e) => update("objectStoreMemory", e.target.value)}
+              className="bg-background"
+              placeholder="2GB"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Worker Name</Label>
+            <Input
+              value={draft.workerName}
+              onChange={(e) => update("workerName", e.target.value)}
+              className="bg-background"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Logging Level</Label>
+            <Input
+              value={draft.loggingLevel}
+              onChange={(e) => update("loggingLevel", e.target.value)}
+              className="bg-background"
+              placeholder="info"
+            />
+          </div>
+        </div>
+        <Button
+          disabled={isBusy}
+          onClick={() => void saveSettings(draft)}
+        >
+          Save Ray Settings
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 function PythonRuntimeSettings() {
   const { health, packageIndex, fetchHealth, fetchPackageIndex } =
     usePythonRuntimeStore();
@@ -250,6 +428,7 @@ export function SettingsPage() {
           <TabsTrigger value="networking">Networking</TabsTrigger>
           <TabsTrigger value="python">Python Runtime</TabsTrigger>
           <TabsTrigger value="dask">Dask Scheduler</TabsTrigger>
+          <TabsTrigger value="ray">Ray</TabsTrigger>
           <TabsTrigger value="plugins">Plugins</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
           <TabsTrigger value="updates">Updates</TabsTrigger>
@@ -264,6 +443,7 @@ export function SettingsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              <DefaultSchedulerSettings />
               <div className="space-y-2">
                 <Label htmlFor="cluster-name">Cluster Name</Label>
                 <Input
@@ -338,6 +518,10 @@ export function SettingsPage() {
 
         <TabsContent value="dask">
           <DaskSchedulerSettings />
+        </TabsContent>
+
+        <TabsContent value="ray">
+          <RaySchedulerSettings />
         </TabsContent>
 
         <TabsContent value="plugins">

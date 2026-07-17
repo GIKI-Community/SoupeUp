@@ -60,7 +60,8 @@ etc.) for the frontend.
 scripts/Setup-PythonRuntime.ps1
 ```
 
-Stages python-build-standalone into `src-tauri/resources/python/`.
+Stages python-build-standalone (Python 3.10.x) into `src-tauri/resources/python/`.
+Required for Dask and Ray on Windows.
 
 ## Tests
 

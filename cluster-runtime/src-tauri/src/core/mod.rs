@@ -86,5 +86,8 @@ pub fn node_is_online(status: &NodeStatus) -> bool {
 
 #[allow(dead_code)]
 pub fn job_is_active(status: &JobStatus) -> bool {
-    matches!(status, JobStatus::Running | JobStatus::Pending)
+    matches!(
+        status,
+        JobStatus::Created | JobStatus::Queued | JobStatus::Scheduling | JobStatus::Running
+    )
 }

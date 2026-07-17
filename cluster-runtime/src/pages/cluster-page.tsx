@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { RayClusterPanel } from "@/components/ray-cluster-panel";
 import { PageHeader } from "@/layouts/app-layout";
 import { useDaskStore } from "@/stores";
 import { DASK_EXAMPLES, exampleErrorMessage, type ComponentStatus } from "@/types";
@@ -147,7 +148,7 @@ export function ClusterPage() {
     <div>
       <PageHeader
         title="Cluster"
-        description="Dask scheduler, workers, live cluster health, and built-in demos."
+        description="Manage Dask and Ray clusters — schedulers, workers, health, and demos."
         actions={
           <div className="flex items-center gap-2">
             <Button
@@ -156,7 +157,7 @@ export function ClusterPage() {
               disabled={isBusy}
               onClick={() => void ensurePackages()}
             >
-              Ensure Packages
+              Ensure Dask Packages
             </Button>
             <Button
               variant="outline"
@@ -173,6 +174,14 @@ export function ClusterPage() {
           </div>
         }
       />
+
+      <Tabs defaultValue="dask" className="w-full">
+        <TabsList className="mb-6">
+          <TabsTrigger value="dask">Dask</TabsTrigger>
+          <TabsTrigger value="ray">Ray</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="dask">
 
       {error && (
         <div className="mb-4 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -556,6 +565,12 @@ export function ClusterPage() {
           </Tabs>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="ray">
+          <RayClusterPanel />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

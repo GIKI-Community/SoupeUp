@@ -1,5 +1,6 @@
 use chrono::Utc;
 use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::dask::client::ClientManager;
 use crate::dask::scheduler::SchedulerManager;
@@ -12,6 +13,10 @@ pub struct MonitoringService {
     scheduler: Arc<SchedulerManager>,
     worker: Arc<WorkerManager>,
     client: Arc<ClientManager>,
+    /// Prevents stacked UI polls from spawning many concurrent Python probes.
+    snapshot_gate: Mutex<()>,
+    /// Last successful probe — returned when a poll overlaps so the UI does not flicker.
+    last_snapshot: RwLock<Option<ClusterSnapshot>>,
 }
 
 impl MonitoringService {
@@ -24,10 +29,17 @@ impl MonitoringService {
             scheduler,
             worker,
             client,
+            snapshot_gate: Mutex::new(()),
+            last_snapshot: RwLock::new(None),
         }
     }
 
     pub async fn snapshot(&self) -> DaskResult<ClusterSnapshot> {
+        // Overlapping poll: serve the last good snapshot (with fresh local status).
+        let Ok(_guard) = self.snapshot_gate.try_lock() else {
+            return Ok(self.cached_or_local().await);
+        };
+
         let scheduler = self.scheduler.status().await;
         let local_worker = self.worker.status().await;
 
@@ -37,80 +49,84 @@ impl MonitoringService {
         let mut active_tasks = 0u64;
         let mut client_connected = false;
 
-        // Prefer live scheduler view when a client can connect.
-        let connect_addr = scheduler
-            .address
-            .clone()
-            .or_else(|| {
-                if local_worker.status == ComponentStatus::Running {
-                    Some(local_worker.scheduler_address.clone())
-                } else {
-                    None
-                }
-            });
+        let connect_addr = scheduler.address.clone().or_else(|| {
+            if local_worker.status == ComponentStatus::Running {
+                Some(local_worker.scheduler_address.clone())
+            } else {
+                None
+            }
+        });
 
         if let Some(addr) = connect_addr {
-            match self.client.connect(Some(addr)).await {
-                Ok(_) => {
+            // One Python probe only (cluster_info). Do not also call connect().
+            self.client.set_address(addr).await;
+            match self.client.cluster_info().await {
+                Ok(info) => {
                     client_connected = true;
-                    if let Ok(info) = self.client.cluster_info().await {
-                        if let Some(arr) = info.get("workers").and_then(|v| v.as_array()) {
-                            for w in arr {
-                                let cw = ConnectedWorker {
-                                    id: w
-                                        .get("id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    name: w
-                                        .get("name")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    address: w
-                                        .get("address")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    nthreads: w
-                                        .get("nthreads")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as usize,
-                                    memory_limit: w
-                                        .get("memoryLimit")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0),
-                                    memory_used: w
-                                        .get("memoryUsed")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0),
-                                    cpu: w.get("cpu").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                    status: w
-                                        .get("status")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown")
-                                        .to_string(),
-                                };
-                                total_cores += cw.nthreads;
-                                total_memory += cw.memory_limit;
-                                workers.push(cw);
-                            }
+                    if let Some(arr) = info.get("workers").and_then(|v| v.as_array()) {
+                        for w in arr {
+                            let cw = ConnectedWorker {
+                                id: w
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                name: w
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                address: w
+                                    .get("address")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                nthreads: w
+                                    .get("nthreads")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0) as usize,
+                                memory_limit: w
+                                    .get("memoryLimit")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                memory_used: w
+                                    .get("memoryUsed")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(0),
+                                cpu: w.get("cpu").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                                status: w
+                                    .get("status")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string(),
+                            };
+                            total_cores += cw.nthreads;
+                            total_memory += cw.memory_limit;
+                            workers.push(cw);
                         }
-                        active_tasks = info
-                            .get("activeTasks")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
                     }
+                    active_tasks = info
+                        .get("activeTasks")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
                 }
                 Err(e) => {
-                    log::debug!("Cluster snapshot client connect skipped: {}", e);
+                    log::debug!("Cluster snapshot probe skipped: {}", e);
+                    // Keep showing the previous worker list on transient probe failures.
+                    if let Some(cached) = self.last_snapshot.read().await.clone() {
+                        let mut snap = cached;
+                        snap.scheduler = scheduler;
+                        snap.local_worker = local_worker;
+                        snap.updated_at = Some(Utc::now());
+                        return Ok(snap);
+                    }
                 }
             }
         }
 
         let health = compute_health(&scheduler.status, workers.len(), &local_worker.status);
 
-        Ok(ClusterSnapshot {
+        let snap = ClusterSnapshot {
             health,
             scheduler,
             local_worker,
@@ -123,7 +139,34 @@ impl MonitoringService {
             bandwidth_bytes_per_sec: 0.0,
             client_connected,
             updated_at: Some(Utc::now()),
-        })
+        };
+        *self.last_snapshot.write().await = Some(snap.clone());
+        Ok(snap)
+    }
+
+    async fn cached_or_local(&self) -> ClusterSnapshot {
+        let scheduler = self.scheduler.status().await;
+        let local_worker = self.worker.status().await;
+        if let Some(mut snap) = self.last_snapshot.read().await.clone() {
+            snap.scheduler = scheduler;
+            snap.local_worker = local_worker;
+            snap.updated_at = Some(Utc::now());
+            return snap;
+        }
+        ClusterSnapshot {
+            health: ClusterHealth::Unknown,
+            scheduler,
+            local_worker,
+            workers: Vec::new(),
+            total_cores: 0,
+            total_memory: 0,
+            active_tasks: 0,
+            completed_tasks: 0,
+            failed_tasks: 0,
+            bandwidth_bytes_per_sec: 0.0,
+            client_connected: false,
+            updated_at: Some(Utc::now()),
+        }
     }
 }
 

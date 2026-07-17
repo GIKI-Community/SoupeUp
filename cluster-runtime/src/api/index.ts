@@ -10,13 +10,25 @@ import type {
   ExampleJobResult,
   ExecutionResult,
   Job,
+  JobDetail,
+  JobProgress,
+  JobResult,
+  JobSpec,
+  JobStatus,
   LogEntry,
   MetricsSnapshot,
   Node,
   PackageInfo,
   Plugin,
   PythonRuntimeHealth,
+  RayClusterSnapshot,
+  RayHeadInfo,
+  RayMetrics,
+  RaySettings,
+  RayWorkerInfo,
   SchedulerInfo,
+  SchedulerListEntry,
+  SubmitAck,
   SystemInfo,
   SystemStatus,
   WorkerInfo,
@@ -40,7 +52,35 @@ export const NodeApi = {
 };
 
 export const JobApi = {
-  list: () => invokeCommand<Job[]>("get_jobs"),
+  list: () => invokeCommand<Job[]>("job_list"),
+  submit: (spec: JobSpec, owner?: string) =>
+    invokeCommand<SubmitAck>("job_submit", { spec, owner }),
+  cancel: (jobId: string) => invokeCommand<void>("job_cancel", { jobId }),
+  status: (jobId: string) => invokeCommand<JobStatus>("job_status", { jobId }),
+  progress: (jobId: string) =>
+    invokeCommand<JobProgress>("job_progress", { jobId }),
+  result: (jobId: string) => invokeCommand<JobResult>("job_result", { jobId }),
+  get: (jobId: string) => invokeCommand<JobDetail>("job_get", { jobId }),
+  retry: (jobId: string) => invokeCommand<SubmitAck>("job_retry", { jobId }),
+  /** Submit a built-in example job via the unified Job API */
+  submitExample: (exampleId: string, name?: string) =>
+    invokeCommand<SubmitAck>("job_submit", {
+      spec: {
+        name: name ?? exampleId,
+        entryPoint: { type: "example", exampleId },
+        tags: ["example"],
+      },
+      owner: "example",
+    }),
+  /** @deprecated use job_list */
+  legacyList: () => invokeCommand<Job[]>("get_jobs"),
+};
+
+export const SchedulerApi = {
+  list: () => invokeCommand<SchedulerListEntry[]>("scheduler_list"),
+  getActive: () => invokeCommand<string>("scheduler_get_active"),
+  setActive: (pluginId: string) =>
+    invokeCommand<void>("scheduler_set_active", { pluginId }),
 };
 
 export const PluginApi = {
@@ -176,4 +216,51 @@ export const DaskApi = {
     invokeCommand<unknown>("dask_job_status", { jobId }),
   cancelJob: (jobId: string) =>
     invokeCommand<void>("dask_cancel_job", { jobId }),
+};
+
+export const RayApi = {
+  ensurePackages: () => invokeCommand<string[]>("ray_ensure_packages"),
+  getSettings: () => invokeCommand<RaySettings>("ray_get_settings"),
+  updateSettings: (settings: RaySettings) =>
+    invokeCommand<RaySettings>("ray_update_settings", { settings }),
+  startHead: () => invokeCommand<RayHeadInfo>("ray_start_head"),
+  stopHead: () => invokeCommand<RayHeadInfo>("ray_stop_head"),
+  restartHead: () => invokeCommand<RayHeadInfo>("ray_restart_head"),
+  headStatus: () => invokeCommand<RayHeadInfo>("ray_head_status"),
+  startWorker: (headAddress?: string) =>
+    invokeCommand<RayWorkerInfo>("ray_start_worker", {
+      headAddress: headAddress ?? null,
+    }),
+  stopWorker: () => invokeCommand<RayWorkerInfo>("ray_stop_worker"),
+  restartWorker: () => invokeCommand<RayWorkerInfo>("ray_restart_worker"),
+  workerStatus: () => invokeCommand<RayWorkerInfo>("ray_worker_status"),
+  connectClient: (address?: string) =>
+    invokeCommand<string>("ray_connect_client", { address: address ?? null }),
+  disconnectClient: () => invokeCommand<void>("ray_disconnect_client"),
+  clusterSnapshot: () =>
+    invokeCommand<RayClusterSnapshot>("ray_cluster_snapshot"),
+  clusterInfo: () => invokeCommand<unknown>("ray_cluster_info"),
+  dashboard: () => invokeCommand<DashboardView>("ray_dashboard"),
+  metrics: () => invokeCommand<RayMetrics>("ray_metrics"),
+  runExample: (exampleId: string) =>
+    invokeCommand<ExampleJobResult>("ray_run_example", {
+      exampleId,
+    }),
+  submitPythonFunction: (functionBody: string, args: unknown) =>
+    invokeCommand<unknown>("ray_submit_python_function", {
+      functionBody,
+      args,
+    }),
+  submitScript: (script: string) =>
+    invokeCommand<unknown>("ray_submit_script", { script }),
+  submitModule: (module: string) =>
+    invokeCommand<unknown>("ray_submit_module", { module }),
+  map: (functionBody: string, items: unknown) =>
+    invokeCommand<unknown>("ray_map", { functionBody, items }),
+  scatter: (data: unknown) => invokeCommand<unknown>("ray_scatter", { data }),
+  gather: (keys: unknown) => invokeCommand<unknown>("ray_gather", { keys }),
+  jobStatus: (jobId: string) =>
+    invokeCommand<unknown>("ray_job_status", { jobId }),
+  cancelJob: (jobId: string) =>
+    invokeCommand<void>("ray_cancel_job", { jobId }),
 };

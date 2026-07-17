@@ -29,7 +29,7 @@ impl PluginApi for PythonRuntimePlugin {
             id: b"plugin-python-runtime\0".as_ptr() as *const _,
             name: b"Python Runtime\0".as_ptr() as *const _,
             version: b"0.1.0\0".as_ptr() as *const _,
-            description: b"Embedded Python 3.13 runtime with virtual environment and package management.\0"
+            description: b"Embedded Python 3.10 runtime with virtual environment and package management.\0"
                 .as_ptr() as *const _,
             author: b"Cluster Runtime Team\0".as_ptr() as *const _,
         }

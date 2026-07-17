@@ -108,6 +108,74 @@ pub fn nodes_from_dask_snapshot(snap: &crate::dask::ClusterSnapshot) -> Vec<Node
     nodes
 }
 
+pub fn nodes_from_ray_snapshot(snap: &crate::ray::ClusterSnapshot) -> Vec<Node> {
+    let now = snap.updated_at.unwrap_or_else(Utc::now);
+    let mut nodes = Vec::new();
+
+    if snap.head.status == crate::ray::ComponentStatus::Running {
+        nodes.push(Node {
+            id: snap
+                .head
+                .process_id
+                .clone()
+                .unwrap_or_else(|| "local-ray-head".to_string()),
+            name: format!("ray-head ({})", snap.head.host),
+            platform: local_platform(),
+            status: NodeStatus::Online,
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            backend: "ray-head".to_string(),
+            version: snap
+                .head
+                .address
+                .clone()
+                .unwrap_or_else(|| "127.0.0.1:6379".to_string()),
+            last_seen: now,
+        });
+    }
+
+    for worker in &snap.workers {
+        let memory_percent = if worker.memory_limit > 0 {
+            (worker.memory_used as f64 / worker.memory_limit as f64) * 100.0
+        } else {
+            0.0
+        };
+        nodes.push(Node {
+            id: worker.id.clone(),
+            name: worker.name.clone(),
+            platform: NodePlatform::Other,
+            status: map_worker_status(&worker.status),
+            cpu_percent: worker.cpu,
+            memory_percent,
+            backend: "ray-worker".to_string(),
+            version: worker.address.clone(),
+            last_seen: now,
+        });
+    }
+
+    if snap.local_worker.status == crate::ray::ComponentStatus::Running
+        && !nodes.iter().any(|n| n.name == snap.local_worker.name)
+    {
+        nodes.push(Node {
+            id: snap
+                .local_worker
+                .process_id
+                .clone()
+                .unwrap_or_else(|| format!("local-{}", snap.local_worker.name)),
+            name: snap.local_worker.name.clone(),
+            platform: local_platform(),
+            status: NodeStatus::Online,
+            cpu_percent: 0.0,
+            memory_percent: 0.0,
+            backend: "ray-worker".to_string(),
+            version: snap.local_worker.head_address.clone(),
+            last_seen: now,
+        });
+    }
+
+    nodes
+}
+
 fn local_platform() -> NodePlatform {
     if cfg!(windows) {
         NodePlatform::Windows

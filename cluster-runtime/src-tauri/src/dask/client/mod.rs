@@ -32,6 +32,11 @@ impl ClientManager {
             .filter(|s| !s.trim().is_empty())
             .unwrap_or_else(|| settings.scheduler_address.clone());
 
+        // Avoid spawning a new Python probe on every UI poll when already connected.
+        if self.connected_address.read().await.as_ref() == Some(&addr) {
+            return Ok(addr);
+        }
+
         let code = scripts::cluster_info_script(&addr);
         let result = self
             .python
@@ -63,6 +68,11 @@ impl ClientManager {
         *self.connected_address.write().await = None;
         log::info!("Dask client disconnected");
         Ok(())
+    }
+
+    /// Remember the scheduler address without spawning a Python probe.
+    pub async fn set_address(&self, address: String) {
+        *self.connected_address.write().await = Some(address);
     }
 
     pub async fn is_connected(&self) -> bool {

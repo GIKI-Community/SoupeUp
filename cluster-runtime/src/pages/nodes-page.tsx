@@ -1,6 +1,7 @@
 import { ArrowUpDown, Search } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { ClusterTopologyDiagram } from "@/components/cluster-topology-diagram";
 import { NodeStatusBadge } from "@/components/status-badges";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PageHeader } from "@/layouts/app-layout";
-import { formatPercent, formatRelativeTime } from "@/lib/utils";
+import { cn, formatPercent, formatRelativeTime } from "@/lib/utils";
 import { useNodesStore } from "@/stores";
 import type { Node, NodeStatus } from "@/types";
 
@@ -59,6 +60,8 @@ export function NodesPage() {
     fetchSummary,
   } = useNodesStore();
 
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
   useEffect(() => {
     void fetchNodes();
     void fetchSummary();
@@ -68,6 +71,13 @@ export function NodesPage() {
     }, 2500);
     return () => window.clearInterval(timer);
   }, [fetchNodes, fetchSummary]);
+
+  // Drop selection if the node disappeared from the latest poll.
+  useEffect(() => {
+    if (selectedNodeId && !nodes.some((n) => n.id === selectedNodeId)) {
+      setSelectedNodeId(null);
+    }
+  }, [nodes, selectedNodeId]);
 
   const filteredNodes = useMemo(() => {
     return nodes
@@ -136,6 +146,12 @@ export function NodesPage() {
         </div>
       )}
 
+      <ClusterTopologyDiagram
+        nodes={nodes}
+        selectedId={selectedNodeId}
+        onSelect={setSelectedNodeId}
+      />
+
       <div className="mb-6 flex flex-col gap-4 sm:flex-row">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -196,20 +212,32 @@ export function NodesPage() {
               </TableRow>
             ) : (
               filteredNodes.map((node) => (
-              <TableRow key={node.id}>
-                <TableCell className="font-medium">{node.name}</TableCell>
-                <TableCell>{platformLabels[node.platform]}</TableCell>
-                <TableCell>
-                  <NodeStatusBadge status={node.status} />
-                </TableCell>
-                <TableCell>{formatPercent(node.cpuPercent)}</TableCell>
-                <TableCell>{formatPercent(node.memoryPercent)}</TableCell>
-                <TableCell className="font-mono text-xs">{node.backend}</TableCell>
-                <TableCell className="font-mono text-xs">{node.version}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  {formatRelativeTime(node.lastSeen)}
-                </TableCell>
-              </TableRow>
+                <TableRow
+                  key={node.id}
+                  className={cn(
+                    "cursor-pointer",
+                    selectedNodeId === node.id && "bg-muted/60",
+                  )}
+                  onClick={() =>
+                    setSelectedNodeId(
+                      selectedNodeId === node.id ? null : node.id,
+                    )
+                  }
+                  data-state={selectedNodeId === node.id ? "selected" : undefined}
+                >
+                  <TableCell className="font-medium">{node.name}</TableCell>
+                  <TableCell>{platformLabels[node.platform]}</TableCell>
+                  <TableCell>
+                    <NodeStatusBadge status={node.status} />
+                  </TableCell>
+                  <TableCell>{formatPercent(node.cpuPercent)}</TableCell>
+                  <TableCell>{formatPercent(node.memoryPercent)}</TableCell>
+                  <TableCell className="font-mono text-xs">{node.backend}</TableCell>
+                  <TableCell className="font-mono text-xs">{node.version}</TableCell>
+                  <TableCell className="text-muted-foreground">
+                    {formatRelativeTime(node.lastSeen)}
+                  </TableCell>
+                </TableRow>
               ))
             )}
           </TableBody>

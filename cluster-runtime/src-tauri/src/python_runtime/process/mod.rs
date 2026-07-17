@@ -15,6 +15,9 @@ use uuid::Uuid;
 use crate::python_runtime::types::{ExecutionContext, PythonError, PythonResult};
 use crate::python_runtime::utils::{temp_script_path, venv_python_path};
 
+#[cfg(windows)]
+mod job_object;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProcessStatus {
@@ -49,6 +52,10 @@ struct ManagedProcess {
     exit_code: Option<i32>,
     stdout: Arc<RwLock<String>>,
     stderr: Arc<RwLock<String>>,
+    /// Windows Job Object — closing it kills the process and descendants that
+    /// did not break away from the job (Ray CLI children sometimes do).
+    #[cfg(windows)]
+    job: Option<job_object::JobObject>,
 }
 
 /// Tracks long-running Python child processes started through the runtime.
@@ -119,6 +126,8 @@ impl BackgroundProcessManager {
 
         #[cfg(windows)]
         {
+            // CREATE_NO_WINDOW | CREATE_SUSPENDED is not available via tokio easily;
+            // CREATE_NO_WINDOW alone is fine — we assign to the job after spawn.
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
@@ -133,6 +142,10 @@ impl BackgroundProcessManager {
 
         let id = Uuid::new_v4().to_string();
         let pid = child.id();
+
+        #[cfg(windows)]
+        let job = pid.and_then(job_object::JobObject::for_pid);
+
         let stdout_buf = Arc::new(RwLock::new(String::new()));
         let stderr_buf = Arc::new(RwLock::new(String::new()));
 
@@ -198,6 +211,8 @@ impl BackgroundProcessManager {
             exit_code: None,
             stdout: stdout_buf,
             stderr: stderr_buf,
+            #[cfg(windows)]
+            job,
         };
 
         self.processes.write().await.insert(id, managed);
@@ -222,18 +237,13 @@ impl BackgroundProcessManager {
                 PythonError::ExecutionError(format!("Background process not found: {}", id))
             })?;
 
-        let pid = proc.pid;
-        kill_process_tree(pid);
-        let _ = proc.child.kill().await;
-        let status = proc.child.try_wait().ok().flatten();
-        proc.status = ProcessStatus::Stopped;
-        proc.exit_code = status.and_then(|s| s.code());
+        terminate_managed(&mut proc).await;
 
         let info = BackgroundProcessInfo {
             id: proc.id.clone(),
             label: proc.label.clone(),
             status: proc.status.clone(),
-            pid,
+            pid: proc.pid,
             started_at: proc.started_at,
             exit_code: proc.exit_code,
             stdout_tail: proc.stdout.read().await.clone(),
@@ -244,43 +254,29 @@ impl BackgroundProcessManager {
             let _ = tokio::fs::remove_file(&proc.script_path).await;
         }
 
-        log::info!("Background process stopped: {} (pid={:?})", id, pid);
+        log::info!("Background process stopped: {} (pid={:?})", id, proc.pid);
         Ok(info)
     }
 
-    /// Kill every tracked background process by PID (used on app exit).
+    /// Kill every tracked background process (used on app exit).
     pub async fn stop_all(&self) {
-        let targets: Vec<(String, Option<u32>, PathBuf)> = {
+        let ids: Vec<String> = {
             let processes = self.processes.read().await;
-            processes
-                .iter()
-                .map(|(id, proc)| (id.clone(), proc.pid, proc.script_path.clone()))
-                .collect()
+            processes.keys().cloned().collect()
         };
 
-        if targets.is_empty() {
+        if ids.is_empty() {
+            log::info!("No background Python processes to stop.");
             return;
         }
 
         log::info!(
             "Stopping {} background Python process(es)...",
-            targets.len()
+            ids.len()
         );
 
-        for (id, pid, _) in &targets {
-            kill_process_tree(*pid);
-            log::info!("Killed background process {} (pid={:?})", id, pid);
-        }
-
-        let mut processes = self.processes.write().await;
-        for (id, _, script_path) in targets {
-            if let Some(mut proc) = processes.remove(&id) {
-                proc.status = ProcessStatus::Stopped;
-                let _ = proc.child.kill().await;
-            }
-            if !script_path.as_os_str().is_empty() {
-                let _ = tokio::fs::remove_file(&script_path).await;
-            }
+        for id in ids {
+            let _ = self.stop(&id).await;
         }
     }
 
@@ -342,7 +338,30 @@ impl BackgroundProcessManager {
     }
 }
 
-/// Force-kill a process and its children by PID.
+async fn terminate_managed(proc: &mut ManagedProcess) {
+    let pid = proc.pid.or_else(|| proc.child.id());
+
+    // 1. Close the Windows Job Object first — kills the process and any
+    //    descendants that remained in the job.
+    #[cfg(windows)]
+    {
+        if let Some(job) = proc.job.take() {
+            job.terminate();
+        }
+    }
+
+    // 2. Tree-kill by PID (covers processes that broke away from the job,
+    //    e.g. Ray CLI grandchildren). Must use /T /F — never /F alone first.
+    kill_process_tree(pid);
+
+    // 3. Ensure the tokio Child handle is cleaned up.
+    let _ = proc.child.kill().await;
+    let status = proc.child.try_wait().ok().flatten();
+    proc.status = ProcessStatus::Stopped;
+    proc.exit_code = status.and_then(|s| s.code());
+}
+
+/// Force-kill a process and its entire tree by PID.
 fn kill_process_tree(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
@@ -351,19 +370,38 @@ fn kill_process_tree(pid: Option<u32>) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        use std::process::Stdio;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+        // Tree-kill FIRST. Killing the root without /T orphans children on Windows.
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status();
     }
 
     #[cfg(not(windows))]
     {
+        // Kill the process group when possible.
         let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
+            .args(["-TERM", &format!("-{}", pid)])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
     }
+}
+
+/// Last-resort cleanup for Ray daemons that escaped the process tree.
+pub fn cleanup_orphaned_cluster_processes() {
+    #[cfg(windows)]
+    job_object::kill_orphaned_ray_processes();
 }
 
 impl Default for BackgroundProcessManager {

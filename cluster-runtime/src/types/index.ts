@@ -20,20 +20,133 @@ export interface Node {
 }
 
 export type JobStatus =
-  | "pending"
+  | "created"
+  | "queued"
+  | "scheduling"
   | "running"
   | "completed"
   | "failed"
   | "cancelled";
 
+export interface ResourceRequirements {
+  cpuCores?: number;
+  memoryBytes?: number;
+  gpuCount?: number;
+  pythonVersion?: string;
+  packages?: string[];
+  arch?: string;
+  os?: string;
+  runtimeType?: string;
+}
+
+export interface DependencyReport {
+  detected: string[];
+  installed: string[];
+  alreadyPresent: string[];
+  skippedStdlib: string[];
+}
+
+export interface JobProgress {
+  percent: number;
+  activeTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  runningNodes: string[];
+  etaSecs?: number;
+}
+
+export interface JobMetrics {
+  executionTimeMs: number;
+  workersUsed: number;
+  cpuUtilization?: number;
+  speedup?: number;
+}
+
+export interface JobResult {
+  jobId: string;
+  status: JobStatus;
+  output?: unknown;
+  errors: string[];
+  metrics: JobMetrics;
+  schedulerMetadata?: unknown;
+  workers: string[];
+  resultSummary?: string;
+}
+
+export interface JobSpec {
+  name: string;
+  description?: string;
+  entryPoint:
+    | { type: "pythonFunction"; body: string }
+    | { type: "pythonScript"; script: string }
+    | { type: "pythonModule"; module: string }
+    | { type: "example"; exampleId: string; args?: unknown };
+  args?: unknown;
+  env?: Record<string, string>;
+  resources?: ResourceRequirements;
+  priority?: number;
+  timeoutSecs?: number;
+  tags?: string[];
+}
+
 export interface Job {
   id: string;
+  name: string;
+  description?: string;
   status: JobStatus;
   owner: string;
   submittedAt: string;
-  runtime: string;
+  schedulerId: string;
   durationSecs: number;
+  resources?: ResourceRequirements;
+  tags?: string[];
+  dependencies?: DependencyReport;
 }
+
+export interface JobDetail extends Job {
+  progress: JobProgress;
+  result?: JobResult;
+  logs: string[];
+}
+
+export interface SchedulerCapabilities {
+  supportsPython: boolean;
+  supportsActors: boolean;
+  supportsDags: boolean;
+  supportsGpu: boolean;
+  supportsFaultTolerance: boolean;
+  supportsAutoscaling: boolean;
+  supportsStreaming: boolean;
+}
+
+export interface SchedulerListEntry {
+  pluginId: string;
+  displayName: string;
+  capabilities: SchedulerCapabilities;
+  available: boolean;
+}
+
+export interface SubmitAck {
+  jobId: string;
+  status: JobStatus;
+}
+
+/** Display name for a scheduler plugin id */
+export function schedulerDisplayName(pluginId: string): string {
+  if (pluginId.includes("dask")) return "Dask";
+  if (pluginId.includes("ray")) return "Ray";
+  return pluginId;
+}
+
+/** Unified example catalog for the Jobs / Cluster UI */
+export const SCHEDULER_EXAMPLES = [
+  { id: "mandelbrot", title: "Mandelbrot Renderer", description: "Render a Mandelbrot fractal across cluster workers" },
+  { id: "monte_carlo_pi", title: "Monte Carlo π Estimation", description: "Estimate π using random sampling" },
+  { id: "matrix_multiply", title: "Matrix Multiplication", description: "Distributed matrix multiply benchmark" },
+  { id: "prime_search", title: "Prime Number Search", description: "Find primes in a range across workers" },
+  { id: "image_blur", title: "Image Blur", description: "Apply Gaussian blur to a synthetic image" },
+  { id: "word_count", title: "Word Count", description: "Count words in text lines across workers" },
+] as const;
 
 export type PluginStatus =
   | "discovered"
@@ -300,6 +413,109 @@ export const DASK_EXAMPLES = [
     id: "prime_search",
     title: "Prime Number Search",
     description: "Search primes up to a limit across the cluster.",
+    packages: [] as string[],
+  },
+  {
+    id: "image_blur",
+    title: "Image Blur",
+    description: "Synthetic image row blur distributed by row.",
+    packages: ["numpy"],
+  },
+  {
+    id: "word_count",
+    title: "Word Count",
+    description: "Classic map-reduce word count over text lines.",
+    packages: [] as string[],
+  },
+] as const;
+
+// ─── Ray Types ────────────────────────────────────────────────────────────────
+
+export interface RayHeadInfo {
+  status: ComponentStatus;
+  address: string | null;
+  dashboardUrl: string | null;
+  processId: string | null;
+  host: string;
+  port: number;
+  dashboardPort: number;
+  startedAt: string | null;
+  error: string | null;
+  logs: string;
+}
+
+export interface RayWorkerInfo {
+  status: ComponentStatus;
+  name: string;
+  headAddress: string;
+  processId: string | null;
+  numCpus: number;
+  objectStoreMemory: string | null;
+  startedAt: string | null;
+  error: string | null;
+  logs: string;
+}
+
+export interface RayClusterSnapshot {
+  health: ClusterHealth;
+  head: RayHeadInfo;
+  localWorker: RayWorkerInfo;
+  workers: ConnectedWorker[];
+  totalCores: number;
+  totalMemory: number;
+  activeTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  bandwidthBytesPerSec: number;
+  clientConnected: boolean;
+  updatedAt: string | null;
+}
+
+export interface RaySettings {
+  headHost: string;
+  gcsPort: number;
+  dashboardPort: number;
+  headAddress: string;
+  workerCpus: number;
+  objectStoreMemory: string;
+  workerName: string;
+  loggingLevel: string;
+}
+
+export interface RayMetrics {
+  headCpu: number;
+  headMemory: number;
+  workerCpu: number;
+  workerMemory: number;
+  tasksPerSec: number;
+  dataTransfer: number;
+  workerLoad: number;
+  workerCount: number;
+}
+
+export const RAY_EXAMPLES = [
+  {
+    id: "mandelbrot",
+    title: "Mandelbrot Renderer",
+    description: "Distribute fractal row rendering across Ray workers.",
+    packages: ["numpy"],
+  },
+  {
+    id: "monte_carlo_pi",
+    title: "Monte Carlo π Estimation",
+    description: "Estimate π with parallel random sampling via Ray.",
+    packages: [] as string[],
+  },
+  {
+    id: "matrix_multiply",
+    title: "Matrix Multiplication",
+    description: "Parallel block matrix multiplications with Ray.",
+    packages: ["numpy"],
+  },
+  {
+    id: "prime_search",
+    title: "Prime Number Search",
+    description: "Search primes up to a limit across the Ray cluster.",
     packages: [] as string[],
   },
   {

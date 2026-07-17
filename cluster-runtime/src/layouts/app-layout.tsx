@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { Outlet } from "react-router-dom";
 
 import { Sidebar } from "@/components/sidebar";
-import { useDaskStore, useMetricsStore } from "@/stores";
+import { useDaskStore, useMetricsStore, useRayStore } from "@/stores";
 
 interface PageHeaderProps {
   title: string;
@@ -28,16 +28,19 @@ export function AppLayout() {
   const fetchMetrics = useMetricsStore((s) => s.fetchMetrics);
   const appendAnimatedPoint = useMetricsStore((s) => s.appendAnimatedPoint);
   const fetchDaskMetrics = useDaskStore((s) => s.fetchMetrics);
+  const fetchRayMetrics = useRayStore((s) => s.fetchMetrics);
 
   useEffect(() => {
     void fetchMetrics();
     void fetchDaskMetrics();
+    void fetchRayMetrics();
     const interval = window.setInterval(() => {
       appendAnimatedPoint();
       void fetchDaskMetrics();
+      void fetchRayMetrics();
     }, 2000);
     return () => window.clearInterval(interval);
-  }, [fetchMetrics, appendAnimatedPoint, fetchDaskMetrics]);
+  }, [fetchMetrics, appendAnimatedPoint, fetchDaskMetrics, fetchRayMetrics]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

@@ -229,6 +229,55 @@ impl PythonExecutionService {
     /// Stop all background Python processes (scheduler, worker, etc.).
     pub async fn shutdown(&self) {
         self.background.stop_all().await;
+        crate::python_runtime::process::cleanup_orphaned_cluster_processes();
+    }
+
+    /// Run `ray stop --force` against the active venv (tears down GCS/raylet).
+    pub async fn ray_stop_force(&self) {
+        let env_path = self.env_manager.get_active_env_path().await;
+        let python = crate::python_runtime::utils::venv_python_path(&env_path);
+
+        #[cfg(windows)]
+        let ray_cli = env_path.join("Scripts").join("ray.exe");
+        #[cfg(not(windows))]
+        let ray_cli = env_path.join("bin").join("ray");
+
+        let mut cmd = if ray_cli.is_file() {
+            let mut c = tokio::process::Command::new(&ray_cli);
+            c.args(["stop", "--force"]);
+            c
+        } else {
+            let mut c = tokio::process::Command::new(&python);
+            c.args(["-m", "ray.scripts.scripts", "stop", "--force"]);
+            c
+        };
+
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        log::info!("Running ray stop --force...");
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(45),
+            cmd.status(),
+        )
+        .await
+        {
+            Ok(Ok(status)) => {
+                log::info!("ray stop --force finished (status={})", status);
+            }
+            Ok(Err(e)) => {
+                log::warn!("ray stop --force failed to launch: {}", e);
+            }
+            Err(_) => {
+                log::warn!("ray stop --force timed out after 45s");
+            }
+        }
     }
 
     // ─── Internal ─────────────────────────────────────────────────────────────

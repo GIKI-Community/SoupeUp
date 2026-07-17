@@ -1,31 +1,21 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-
+pub mod api;
+pub mod dependencies;
+pub mod examples;
 pub mod history;
+pub mod manager;
+pub mod models;
+pub mod progress;
+pub mod queue;
+pub mod resources;
+pub mod results;
 
-pub use history::JobHistory;
+#[cfg(test)]
+mod tests;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum JobStatus {
-    Pending,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
+pub use api::JobApi;
+pub use history::JobHistoryStore;
+pub use manager::JobManager;
+pub use models::*;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Job {
-    pub id: String,
-    pub status: JobStatus,
-    pub owner: String,
-    pub submitted_at: DateTime<Utc>,
-    pub runtime: String,
-    pub duration_secs: u64,
-}
-
-pub fn mock_jobs() -> Vec<Job> {
-    Vec::new()
-}
+// Legacy type alias for UI backward compatibility during migration
+pub type JobHistory = JobHistoryStore;

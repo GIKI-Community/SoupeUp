@@ -6,3 +6,4 @@ export { useMetricsStore } from "./metrics-store";
 export { useSettingsStore } from "./settings-store";
 export { usePythonRuntimeStore } from "./python-runtime-store";
 export { useDaskStore } from "./dask-store";
+export { useRayStore } from "./ray-store";

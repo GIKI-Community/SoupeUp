@@ -6,6 +6,7 @@
 //! All Python interaction goes through `PythonExecutionService`.
 //! Scheduler / Worker / Client are controlled via Dask's official Python API.
 
+pub mod adapter;
 pub mod client;
 pub mod dashboard;
 pub mod examples;

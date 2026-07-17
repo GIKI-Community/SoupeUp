@@ -7,7 +7,7 @@ use crate::python_runtime::types::PythonError;
 pub struct PythonInterpreter {
     /// Absolute path to the Python executable.
     pub path: PathBuf,
-    /// Version string, e.g. `"3.13.0"`.
+    /// Version string, e.g. `"3.10.11"`.
     pub version: String,
     /// Whether this interpreter came from the bundled distribution.
     pub is_bundled: bool,
@@ -52,13 +52,13 @@ impl PythonInterpreter {
 
 // ─── Discovery Strategies ─────────────────────────────────────────────────────
 
-/// Try to use the bundled Python 3.13 distribution shipped inside the app.
+/// Try to use the bundled Python 3.10 distribution shipped inside the app.
 ///
 /// The bundled distribution should be placed at:
 ///   - Production: `<exe_dir>/python/` (copied by `tauri build` from `resources/python/`)
 ///   - Dev:        `src-tauri/resources/python/`
 ///
-/// Run `scripts/Setup-PythonRuntime.ps1` to download and stage Python 3.13.
+/// Run `scripts/Setup-PythonRuntime.ps1` to download and stage Python 3.10.
 pub async fn embedded_python() -> Option<PythonInterpreter> {
     let base = bundled_python_dir()?;
 
@@ -96,15 +96,15 @@ pub async fn embedded_python() -> Option<PythonInterpreter> {
 }
 
 /// Search the system PATH for a usable Python 3.x interpreter.
-/// Prefers higher versions (3.13, 3.12, …) over lower ones.
+/// Prefers 3.10 on Windows (Dask + Ray compatibility), then newer versions.
 pub async fn find_existing_python() -> Option<PythonInterpreter> {
     let candidates: &[&str] = if cfg!(windows) {
         &[
-            "python3.13.exe", "python3.12.exe", "python3.11.exe",
-            "python3.10.exe", "python3.exe", "python.exe",
+            "python3.10.exe", "python3.11.exe", "python3.12.exe",
+            "python3.13.exe", "python3.exe", "python.exe",
         ]
     } else {
-        &["python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"]
+        &["python3.10", "python3.11", "python3.12", "python3.13", "python3", "python"]
     };
 
     for name in candidates {

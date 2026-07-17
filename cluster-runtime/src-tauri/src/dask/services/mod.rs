@@ -94,6 +94,16 @@ impl DaskService {
         Ok(newly)
     }
 
+    /// Detect imports in the job source and install missing packages for workers.
+    pub async fn ensure_job_dependencies(
+        &self,
+        spec: &crate::jobs::JobSpec,
+    ) -> DaskResult<crate::jobs::DependencyReport> {
+        crate::jobs::dependencies::resolve_and_install(&self.python, spec)
+            .await
+            .map_err(DaskError::PackageError)
+    }
+
     pub async fn initialize(&self) -> DaskResult<()> {
         self.ensure_packages().await?;
         log::info!("Dask Scheduler Plugin initialized");
@@ -275,13 +285,13 @@ impl DaskService {
         dashboard_view(&settings)
     }
 
-    /// Stop worker, scheduler, and any remaining background Python processes.
+    /// Stop worker, scheduler, and disconnect client.
+    /// Remaining background processes are swept by PythonExecutionService::shutdown.
     pub async fn shutdown(&self) {
         log::info!("Dask Scheduler Plugin: shutting down...");
         let _ = self.client.disconnect().await;
         let _ = self.worker.stop().await;
         let _ = self.scheduler.stop().await;
-        self.python.shutdown().await;
     }
 }
 

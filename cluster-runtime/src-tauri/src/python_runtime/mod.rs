@@ -1,6 +1,6 @@
 //! # Python Runtime Plugin
 //!
-//! Provides embedded Python 3.13 management for the Cluster Runtime platform.
+//! Provides embedded Python 3.10 management for the Cluster Runtime platform.
 //!
 //! ## Module Structure
 //!
