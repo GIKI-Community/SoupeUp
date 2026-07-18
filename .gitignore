@@ -16,6 +16,8 @@ temp/
 
 venv*
 
+node_modules/
+
 # C extensions
 *.so
 

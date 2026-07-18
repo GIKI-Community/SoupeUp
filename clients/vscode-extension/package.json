@@ -1,0 +1,122 @@
+{
+  "name": "cluster-runtime-vscode",
+  "displayName": "Cluster Runtime",
+  "description": "Run and monitor distributed Python jobs on your local Cluster Runtime (Dask/Ray) from VS Code.",
+  "version": "0.1.0",
+  "publisher": "cluster-runtime",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "workspaceContains:**/*.cluster"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "clusterRuntime",
+          "title": "Cluster Runtime",
+          "icon": "media/cluster.svg"
+        }
+      ]
+    },
+    "views": {
+      "clusterRuntime": [
+        { "id": "clusterRuntime.cluster", "name": "Cluster" },
+        { "id": "clusterRuntime.jobs", "name": "Jobs" },
+        { "id": "clusterRuntime.workers", "name": "Workers" },
+        { "id": "clusterRuntime.schedulers", "name": "Schedulers" },
+        { "id": "clusterRuntime.logs", "name": "Logs" }
+      ]
+    },
+    "commands": [
+      { "command": "clusterRuntime.connect", "title": "Cluster Runtime: Connect", "icon": "$(plug)" },
+      { "command": "clusterRuntime.disconnect", "title": "Cluster Runtime: Disconnect", "icon": "$(debug-disconnect)" },
+      { "command": "clusterRuntime.runOnCluster", "title": "Cluster Runtime: Run on Cluster", "icon": "$(play)" },
+      { "command": "clusterRuntime.cancelJob", "title": "Cluster Runtime: Cancel Job", "icon": "$(stop-circle)" },
+      { "command": "clusterRuntime.restartJob", "title": "Cluster Runtime: Restart Job", "icon": "$(debug-restart)" },
+      { "command": "clusterRuntime.viewJobLogs", "title": "Cluster Runtime: View Job Logs", "icon": "$(output)" },
+      { "command": "clusterRuntime.viewDashboard", "title": "Cluster Runtime: View Dashboard", "icon": "$(dashboard)" },
+      { "command": "clusterRuntime.openDesktop", "title": "Cluster Runtime: Open Desktop App", "icon": "$(window)" },
+      { "command": "clusterRuntime.refresh", "title": "Cluster Runtime: Refresh Cluster", "icon": "$(refresh)" },
+      { "command": "clusterRuntime.selectScheduler", "title": "Cluster Runtime: Select Scheduler", "icon": "$(list-selection)" },
+      { "command": "clusterRuntime.initializeProject", "title": "Cluster Runtime: Initialize Project", "icon": "$(new-file)" }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "clusterRuntime.runOnCluster",
+          "when": "resourceLangId == python",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        { "command": "clusterRuntime.refresh", "when": "view == clusterRuntime.cluster", "group": "navigation" },
+        { "command": "clusterRuntime.selectScheduler", "when": "view == clusterRuntime.schedulers", "group": "navigation" }
+      ],
+      "view/item/context": [
+        { "command": "clusterRuntime.cancelJob", "when": "view == clusterRuntime.jobs && viewItem == job-running", "group": "inline" },
+        { "command": "clusterRuntime.restartJob", "when": "view == clusterRuntime.jobs && viewItem == job-finished", "group": "inline" },
+        { "command": "clusterRuntime.viewJobLogs", "when": "view == clusterRuntime.jobs && viewItem =~ /job-/", "group": "inline" }
+      ]
+    },
+    "configuration": {
+      "title": "Cluster Runtime",
+      "properties": {
+        "clusterRuntime.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically discover and connect to a running Cluster Runtime on activation."
+        },
+        "clusterRuntime.defaultScheduler": {
+          "type": "string",
+          "enum": ["", "dask", "ray"],
+          "default": "",
+          "description": "Preferred scheduler to select on connect (empty leaves the runtime's current choice)."
+        },
+        "clusterRuntime.watchFileChanges": {
+          "type": "boolean",
+          "default": false,
+          "description": "Watch the active file and re-run on save (reserved for a future release)."
+        },
+        "clusterRuntime.openDashboardAfterSubmission": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the scheduler dashboard after submitting a job."
+        },
+        "clusterRuntime.notifications": {
+          "type": "string",
+          "enum": ["all", "failuresOnly", "none"],
+          "default": "all",
+          "description": "Which job lifecycle notifications to show."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "node esbuild.js --production",
+    "typecheck": "tsc --noEmit",
+    "compile-tests": "tsc -p tsconfig.test.json",
+    "test": "node esbuild.js && npm run compile-tests && vscode-test"
+  },
+  "dependencies": {
+    "@cluster-runtime/client": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.24.0",
+    "typescript": "~5.7.2"
+  }
+}

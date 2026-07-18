@@ -2,6 +2,7 @@
 
 use tauri::Manager;
 
+mod api_server;
 mod commands;
 mod config;
 mod core;
@@ -146,6 +147,21 @@ pub fn run() {
                     registry.load_active().await;
                     job_manager.load_persisted().await;
                 });
+            }
+
+            // Start the local HTTP + WebSocket API server (external clients: VS Code, CLI).
+            {
+                let state = app.state::<AppState>();
+                api_server::start(
+                    state.job_api.clone(),
+                    state.job_manager.clone(),
+                    state.scheduler_registry.clone(),
+                    state.python_service.clone(),
+                    state.dask_service.clone(),
+                    state.ray_service.clone(),
+                    state.event_bus.clone(),
+                    state.data_dir.clone(),
+                );
             }
 
             // Register built-in plugins so the UI can show them while async setup runs.

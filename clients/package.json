@@ -1,0 +1,11 @@
+{
+  "name": "@cluster-runtime/clients",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cluster Runtime client ecosystem: shared TypeScript client and the VS Code extension.",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

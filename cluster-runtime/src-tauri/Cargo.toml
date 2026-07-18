@@ -37,6 +37,7 @@ hex = "0.4"
 base64 = "0.21"
 rand_core = { version = "0.6", features = ["getrandom"] }
 async-trait = "0.1"
+axum = { version = "0.7", features = ["ws"] }
 
 [profile.release]
 codegen-units = 1
