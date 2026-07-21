@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "server:dev": "cargo run --manifest-path src-tauri/Cargo.toml --bin cluster-runtime-server",
+    "server:build": "cargo build --release --manifest-path src-tauri/Cargo.toml --bin cluster-runtime-server"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.19",

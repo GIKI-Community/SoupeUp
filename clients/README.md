@@ -19,29 +19,49 @@ VS Code Extension (Node)
 @cluster-runtime/client (TS)
         │  HTTP + WebSocket (loopback + bearer token)
         ▼
-ApiServer (axum, inside the Tauri desktop app)
+ApiServer (axum)
+        │  hosted by either:
+        │  • Tauri desktop app (GUI), or
+        │  • cluster-runtime-server (headless)
         │
         ├─ JobManager / JobApi
-        ├─ SchedulerRegistry → Dask / Ray adapters
+        ├─ SchedulerRegistry → Dask / Ray / MPI adapters
+        ├─ P2P (libp2p WAN mesh on :8080/ws)
         └─ EventBus → WebSocket stream
 ```
 
-The desktop app remains authoritative for cluster administration. Clients only
-talk to the local HTTP API; they never touch Dask or Ray directly.
+Either the desktop app **or** the headless server hosts the API — do not run both
+against the same port/data dir at once. Clients only talk to the local HTTP API;
+they never touch Dask, Ray, or MPI directly. Cross-node traffic uses libp2p
+(default WebSocket listen `/ip4/0.0.0.0/tcp/8080/ws`; optional 80/443).
 
-## Desktop API server
+WAN join: set `CLUSTER_RUNTIME_P2P_BOOTSTRAP` to peer multiaddrs, and/or
+`POST /v1/peers` with `{ "multiaddr": "…" }`. Override listens with
+`CLUSTER_RUNTIME_P2P_LISTEN`.
 
-The desktop app (`cluster-runtime/src-tauri/src/api_server/`) starts an
-`axum` server on `127.0.0.1:8129` (override with the `CLUSTER_RUNTIME_API_ADDR`
-env var). On startup it generates a random bearer token and writes a discovery
-file so clients can auto-connect:
+## Desktop / headless API server
+
+Both the Tauri desktop app and the headless binary (`cluster-runtime-server`)
+start the same `axum` server on `127.0.0.1:8129` (override with
+`CLUSTER_RUNTIME_API_ADDR`). On startup they generate a random bearer token and
+write a discovery file so clients can auto-connect:
 
 - **Windows:** `%APPDATA%\dev.cluster-runtime.app\api\endpoint.json`
 - **macOS:** `~/Library/Application Support/dev.cluster-runtime.app/api/endpoint.json`
 - **Linux:** `~/.local/share/dev.cluster-runtime.app/api/endpoint.json`
 
+Override the data directory with `CLUSTER_RUNTIME_DATA_DIR` (headless binary;
+desktop still uses Tauri’s app data dir).
+
 ```json
 { "url": "http://127.0.0.1:8129", "token": "…", "pid": 1234 }
+```
+
+Headless run (from `cluster-runtime/`):
+
+```bash
+pnpm server:dev      # cargo run --bin cluster-runtime-server
+pnpm server:build    # release binary under src-tauri/target/release/
 ```
 
 ### Endpoint reference
@@ -55,12 +75,14 @@ file so clients can auto-connect:
 | PUT | `/v1/schedulers/active` | yes | Body `{ pluginId }` |
 | GET | `/v1/cluster` | yes | Cluster overview (scheduler, workers, cores, memory) |
 | GET | `/v1/nodes` | yes | Worker nodes |
-| POST | `/v1/jobs` | yes | Submit a `JobSpec` (`?owner=` optional) |
+| POST | `/v1/jobs` | yes | Submit a `JobSpec` (`?owner=` optional; `?targetPeer=` forwards over P2P) |
 | GET | `/v1/jobs` | yes | List jobs |
 | GET | `/v1/jobs/:id` | yes | Job detail (progress, logs, result) |
 | GET | `/v1/jobs/:id/result` | yes | Job result |
 | POST | `/v1/jobs/:id/cancel` | yes | Cancel a job |
 | POST | `/v1/jobs/:id/retry` | yes | Retry a job |
+| GET | `/v1/peers` | yes | Local peer id, listen addrs, connected peers |
+| POST | `/v1/peers` | yes | Dial a peer (`{ "multiaddr": "…" }`) |
 | GET | `/v1/logs` | yes | Recent runtime logs |
 | GET | `/v1/events` | yes | WebSocket event + status stream |
 
@@ -98,9 +120,10 @@ pnpm -r test        # run client unit tests
 
 ## Troubleshooting
 
-- **"No running Cluster Runtime found"** — the desktop app isn't running, or it
-  hasn't written `endpoint.json` yet. Launch the desktop app and retry.
-- **401 Unauthorized** — a stale token. Restart the desktop app to regenerate
-  the discovery file, then reconnect.
-- **Cannot reach the API** — confirm nothing else occupies port 8129, or set
-  `CLUSTER_RUNTIME_API_ADDR` and reconnect.
+- **"No running Cluster Runtime found"** — neither the desktop app nor
+  `cluster-runtime-server` is running, or `endpoint.json` has not been written
+  yet. Launch one of them and retry.
+- **401 Unauthorized** — a stale token. Restart the runtime to regenerate the
+  discovery file, then reconnect.
+- **Cannot reach the API** — confirm nothing else occupies port 8129 (including
+  both GUI and headless at once), or set `CLUSTER_RUNTIME_API_ADDR` and reconnect.

@@ -116,6 +116,9 @@ impl DaskSchedulerAdapter {
                 .await
                 .map(|r| Self::map_example_result(job_id, r))
                 .map_err(|e| SchedulerError::JobError(e.to_string())),
+            EntryPoint::MpiExecutable { .. } => Err(SchedulerError::Unsupported(
+                "MpiExecutable jobs require the MPI scheduler".into(),
+            )),
         }?;
 
         {

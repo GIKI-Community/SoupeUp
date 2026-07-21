@@ -9,10 +9,11 @@ use crate::jobs::models::{
     DependencyReport, EntryPoint, JobMetrics, JobProgress, JobResult, JobSpec, JobStatus, JobSummary,
     SchedulerCapabilities, SchedulerInfo, SubmitAck,
 };
-use crate::ray::types::{ExampleJobResult, JobResult as RayJobResult};
-use crate::ray::RayService;
+use crate::mpi::jobs::is_python_mpi_entry;
+use crate::mpi::types::MpiLaunchResult;
+use crate::mpi::MpiService;
 use crate::scheduler::abstraction::{SchedulerError, SchedulerResult, SchedulerService};
-use crate::scheduler::selection::RAY_PLUGIN_ID;
+use crate::scheduler::selection::MPI_PLUGIN_ID;
 
 #[derive(Debug, Clone)]
 struct TrackedJob {
@@ -22,20 +23,20 @@ struct TrackedJob {
     submitted_at: chrono::DateTime<Utc>,
 }
 
-pub struct RaySchedulerAdapter {
-    service: Arc<RayService>,
+pub struct MpiSchedulerAdapter {
+    service: Arc<MpiService>,
     jobs: Arc<RwLock<HashMap<String, TrackedJob>>>,
 }
 
-impl RaySchedulerAdapter {
-    pub fn new(service: Arc<RayService>) -> Self {
+impl MpiSchedulerAdapter {
+    pub fn new(service: Arc<MpiService>) -> Self {
         Self {
             service,
             jobs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    fn map_ray_result(job_id: &str, raw: RayJobResult) -> JobResult {
+    fn map_result(job_id: &str, raw: MpiLaunchResult) -> JobResult {
         JobResult {
             job_id: job_id.to_string(),
             status: if raw.success {
@@ -43,43 +44,37 @@ impl RaySchedulerAdapter {
             } else {
                 JobStatus::Failed
             },
-            output: raw.result,
-            errors: raw.error.map(|e| vec![e]).unwrap_or_default(),
-            metrics: JobMetrics {
-                execution_time_ms: raw.execution_time_ms,
-                workers_used: raw.workers_used,
-                cpu_utilization: raw.cpu_utilization,
-                speedup: raw.speedup,
-                extra: serde_json::Value::Null,
-            },
-            scheduler_metadata: serde_json::json!({ "schedulerJobId": raw.job_id }),
-            workers: vec![],
-            artifacts: vec![],
-            result_summary: None,
-        }
-    }
-
-    fn map_example_result(job_id: &str, raw: ExampleJobResult) -> JobResult {
-        JobResult {
-            job_id: job_id.to_string(),
-            status: if raw.success {
-                JobStatus::Completed
+            output: Some(serde_json::json!({
+                "stdout": raw.stdout,
+                "stderr": raw.stderr,
+                "exitCode": raw.exit_code,
+                "ranks": raw.ranks,
+            })),
+            errors: if raw.success {
+                vec![]
+            } else if raw.stderr.is_empty() {
+                vec![format!(
+                    "MPI job exited with code {:?}",
+                    raw.exit_code
+                )]
             } else {
-                JobStatus::Failed
+                vec![raw.stderr.clone()]
             },
-            output: raw.details,
-            errors: raw.error.map(|e| vec![e]).unwrap_or_default(),
             metrics: JobMetrics {
                 execution_time_ms: raw.execution_time_ms,
-                workers_used: raw.workers_used,
-                cpu_utilization: raw.cpu_utilization,
-                speedup: raw.speedup,
-                extra: serde_json::json!({ "exampleId": raw.example_id }),
+                workers_used: raw.ranks as usize,
+                cpu_utilization: Some(0.0),
+                speedup: Some(0.0),
+                extra: serde_json::json!({ "ranks": raw.ranks }),
             },
-            scheduler_metadata: serde_json::Value::Null,
+            scheduler_metadata: serde_json::json!({ "plugin": MPI_PLUGIN_ID }),
             workers: vec![],
             artifacts: vec![],
-            result_summary: Some(raw.result_summary),
+            result_summary: Some(if raw.success {
+                format!("MPI completed ({} ranks)", raw.ranks)
+            } else {
+                format!("MPI failed (exit {:?})", raw.exit_code)
+            }),
         }
     }
 
@@ -91,35 +86,12 @@ impl RaySchedulerAdapter {
             }
         }
 
-        let result = match &spec.entry_point {
-            EntryPoint::PythonFunction { body } => self
-                .service
-                .submit_python_function(body.clone(), spec.args.clone())
-                .await
-                .map(|r| Self::map_ray_result(job_id, r))
-                .map_err(|e| SchedulerError::JobError(e.to_string())),
-            EntryPoint::PythonScript { script } => self
-                .service
-                .submit_script(script.clone())
-                .await
-                .map(|r| Self::map_ray_result(job_id, r))
-                .map_err(|e| SchedulerError::JobError(e.to_string())),
-            EntryPoint::PythonModule { module } => self
-                .service
-                .submit_module(module.clone())
-                .await
-                .map(|r| Self::map_ray_result(job_id, r))
-                .map_err(|e| SchedulerError::JobError(e.to_string())),
-            EntryPoint::Example { example_id, .. } => self
-                .service
-                .run_example(example_id.clone())
-                .await
-                .map(|r| Self::map_example_result(job_id, r))
-                .map_err(|e| SchedulerError::JobError(e.to_string())),
-            EntryPoint::MpiExecutable { .. } => Err(SchedulerError::Unsupported(
-                "MpiExecutable jobs require the MPI scheduler".into(),
-            )),
-        }?;
+        let raw = self
+            .service
+            .run_job(job_id, spec)
+            .await
+            .map_err(|e| SchedulerError::JobError(e.to_string()))?;
+        let result = Self::map_result(job_id, raw);
 
         {
             let mut jobs = self.jobs.write().await;
@@ -134,53 +106,80 @@ impl RaySchedulerAdapter {
 }
 
 #[async_trait]
-impl SchedulerService for RaySchedulerAdapter {
+impl SchedulerService for MpiSchedulerAdapter {
     fn plugin_id(&self) -> &str {
-        RAY_PLUGIN_ID
+        MPI_PLUGIN_ID
     }
 
     fn display_name(&self) -> &str {
-        "Ray"
+        "MPI"
     }
 
     async fn capabilities(&self) -> SchedulerCapabilities {
+        let python_ready = self.service.toolchain().await.is_some()
+            && self.service.is_ready().await;
+        // Advertise Python when we might run mpi4py (actual check at submit).
+        let _ = python_ready;
         SchedulerCapabilities {
             supports_python: true,
-            supports_actors: true,
+            supports_actors: false,
             supports_dags: false,
             supports_gpu: false,
-            supports_fault_tolerance: true,
+            supports_fault_tolerance: false,
             supports_autoscaling: false,
             supports_streaming: false,
         }
     }
 
     async fn cluster_info(&self) -> SchedulerResult<SchedulerInfo> {
-        let snap = self
-            .service
-            .cluster_snapshot()
-            .await
-            .map_err(|e| SchedulerError::ClusterError(e.to_string()))?;
+        let tc = self.service.toolchain().await;
+        let ready = tc.is_some();
         Ok(SchedulerInfo {
-            plugin_id: RAY_PLUGIN_ID.to_string(),
-            display_name: "Ray".to_string(),
-            health: format!("{:?}", snap.health).to_lowercase(),
-            address: snap.head.address.clone(),
-            dashboard_url: snap.head.dashboard_url.clone(),
-            worker_count: snap.workers.len(),
-            total_cores: snap.total_cores,
-            client_connected: snap.client_connected,
+            plugin_id: MPI_PLUGIN_ID.to_string(),
+            display_name: "MPI".to_string(),
+            health: if ready {
+                "healthy".into()
+            } else {
+                "unavailable".into()
+            },
+            address: tc.map(|t| t.launcher),
+            dashboard_url: None,
+            worker_count: 0,
+            total_cores: 0,
+            client_connected: ready,
         })
     }
 
     async fn ensure_job_dependencies(&self, spec: &JobSpec) -> SchedulerResult<DependencyReport> {
-        self.service
-            .ensure_job_dependencies(spec)
-            .await
-            .map_err(|e| SchedulerError::JobError(e.to_string()))
+        if is_python_mpi_entry(&spec.entry_point) {
+            self.service
+                .ensure_mpi4py()
+                .await
+                .map_err(|e| SchedulerError::JobError(e.to_string()))?;
+            return Ok(DependencyReport {
+                detected: vec!["mpi4py".into()],
+                installed: vec!["mpi4py".into()],
+                already_present: vec![],
+                skipped_stdlib: vec![],
+                ..Default::default()
+            });
+        }
+        Ok(DependencyReport::default())
     }
 
     async fn submit(&self, job_id: &str, spec: &JobSpec) -> SchedulerResult<SubmitAck> {
+        match &spec.entry_point {
+            EntryPoint::MpiExecutable { .. }
+            | EntryPoint::PythonScript { .. }
+            | EntryPoint::PythonFunction { .. } => {}
+            other => {
+                return Err(SchedulerError::Unsupported(format!(
+                    "MPI scheduler does not support this entry point: {:?}",
+                    std::mem::discriminant(other)
+                )));
+            }
+        }
+
         self.jobs.write().await.insert(
             job_id.to_string(),
             TrackedJob {
@@ -193,13 +192,12 @@ impl SchedulerService for RaySchedulerAdapter {
 
         let jobs = self.jobs.clone();
         let job_id_owned = job_id.to_string();
-        let spec_clone = spec.clone();
-
-        let this = RaySchedulerAdapter {
+        let this = MpiSchedulerAdapter {
             service: self.service.clone(),
             jobs: jobs.clone(),
         };
-        match this.execute_spec(&job_id_owned, &spec_clone).await {
+
+        match this.execute_spec(&job_id_owned, spec).await {
             Ok(result) => {
                 if let Some(tracked) = jobs.write().await.get_mut(&job_id_owned) {
                     tracked.status = result.status.clone();
@@ -240,7 +238,7 @@ impl SchedulerService for RaySchedulerAdapter {
 
     async fn cancel(&self, job_id: &str) -> SchedulerResult<()> {
         self.service
-            .cancel_job(job_id.to_string())
+            .cancel_job(job_id)
             .await
             .map_err(|e| SchedulerError::JobError(e.to_string()))?;
         if let Some(tracked) = self.jobs.write().await.get_mut(job_id) {
@@ -295,7 +293,7 @@ impl SchedulerService for RaySchedulerAdapter {
                 id: id.clone(),
                 name: tracked.name.clone(),
                 status: tracked.status.clone(),
-                scheduler_id: RAY_PLUGIN_ID.to_string(),
+                scheduler_id: MPI_PLUGIN_ID.to_string(),
                 submitted_at: tracked.submitted_at,
                 duration_secs: tracked
                     .result
@@ -307,7 +305,10 @@ impl SchedulerService for RaySchedulerAdapter {
                 } else {
                     0.0
                 },
-                result_summary: tracked.result.as_ref().and_then(|r| r.result_summary.clone()),
+                result_summary: tracked
+                    .result
+                    .as_ref()
+                    .and_then(|r| r.result_summary.clone()),
             })
             .collect())
     }

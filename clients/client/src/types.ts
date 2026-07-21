@@ -80,7 +80,13 @@ export type EntryPoint =
   | { type: "pythonFunction"; body: string }
   | { type: "pythonScript"; script: string }
   | { type: "pythonModule"; module: string }
-  | { type: "example"; exampleId: string; args?: unknown };
+  | { type: "example"; exampleId: string; args?: unknown }
+  | {
+      type: "mpiExecutable";
+      executable: string;
+      ranks?: number;
+      hostfile?: string;
+    };
 
 export interface JobSpec {
   name: string;

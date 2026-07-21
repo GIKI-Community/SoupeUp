@@ -31,6 +31,7 @@ import type {
   SubmitAck,
   SystemInfo,
   SystemStatus,
+  UpdateCheckResult,
   WorkerInfo,
 } from "@/types";
 
@@ -263,4 +264,9 @@ export const RayApi = {
     invokeCommand<unknown>("ray_job_status", { jobId }),
   cancelJob: (jobId: string) =>
     invokeCommand<void>("ray_cancel_job", { jobId }),
+};
+
+export const UpdateApi = {
+  check: () => invokeCommand<UpdateCheckResult>("check_for_updates"),
+  getVersion: () => invokeCommand<string>("get_app_version"),
 };

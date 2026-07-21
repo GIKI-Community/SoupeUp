@@ -15,6 +15,7 @@ const defaultSettings: AppSettings = {
   enableRemote: false,
   authEnabled: false,
   tlsEnabled: false,
+  autoCheckUpdates: true,
 };
 
 interface SettingsState {

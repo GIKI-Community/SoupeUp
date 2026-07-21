@@ -10,6 +10,7 @@ use crate::scheduler::abstraction::{SchedulerError, SchedulerService};
 
 pub const DASK_PLUGIN_ID: &str = "plugin-dask-scheduler";
 pub const RAY_PLUGIN_ID: &str = "plugin-ray";
+pub const MPI_PLUGIN_ID: &str = "plugin-mpi";
 pub const DEFAULT_SCHEDULER: &str = DASK_PLUGIN_ID;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

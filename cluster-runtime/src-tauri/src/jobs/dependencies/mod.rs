@@ -106,7 +106,9 @@ fn source_from_spec(spec: &JobSpec) -> Option<&str> {
     match &spec.entry_point {
         EntryPoint::PythonFunction { body } => Some(body.as_str()),
         EntryPoint::PythonScript { script } => Some(script.as_str()),
-        EntryPoint::PythonModule { .. } | EntryPoint::Example { .. } => None,
+        EntryPoint::PythonModule { .. }
+        | EntryPoint::Example { .. }
+        | EntryPoint::MpiExecutable { .. } => None,
     }
 }
 

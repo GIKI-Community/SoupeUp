@@ -3,10 +3,12 @@
 use tauri::Manager;
 
 mod api_server;
+pub mod bootstrap;
 mod commands;
 mod config;
 mod core;
 mod dask;
+mod mpi;
 mod ray;
 mod events;
 mod jobs;
@@ -18,6 +20,7 @@ mod scheduler;
 mod sdk;
 mod security;
 mod storage;
+mod updates;
 
 pub mod plugin_api;
 pub mod plugin_host;
@@ -30,16 +33,15 @@ pub mod runtime;
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use dask::adapter::DaskSchedulerAdapter;
 use dask::DaskService;
-use ray::adapter::RaySchedulerAdapter;
-use ray::RayService;
 use events::EventBus;
 use jobs::{JobApi, JobHistoryStore, JobManager};
 use jobs::progress::ProgressTracker;
 use jobs::results::ResultStore;
+use mpi::MpiService;
 use plugin_registry::PluginRegistry;
 use python_runtime::PythonExecutionService;
+use ray::RayService;
 use scheduler::SchedulerRegistry;
 
 pub struct AppState {
@@ -51,6 +53,10 @@ pub struct AppState {
     pub dask_service: Arc<tokio::sync::RwLock<Option<Arc<DaskService>>>>,
     /// The Ray service. `None` until Python is ready and packages are installed.
     pub ray_service: Arc<tokio::sync::RwLock<Option<Arc<RayService>>>>,
+    /// The MPI service. Initialized independently of Python.
+    pub mpi_service: Arc<tokio::sync::RwLock<Option<Arc<MpiService>>>>,
+    /// WAN libp2p mesh (optional until started).
+    pub p2p_service: Arc<tokio::sync::RwLock<Option<Arc<crate::network::p2p::P2pService>>>>,
     pub scheduler_registry: Arc<SchedulerRegistry>,
     pub job_history: Arc<JobHistoryStore>,
     pub job_manager: Arc<JobManager>,
@@ -90,6 +96,8 @@ impl AppState {
             python_service: Arc::new(tokio::sync::RwLock::new(None)),
             dask_service: Arc::new(tokio::sync::RwLock::new(None)),
             ray_service: Arc::new(tokio::sync::RwLock::new(None)),
+            mpi_service: Arc::new(tokio::sync::RwLock::new(None)),
+            p2p_service: Arc::new(tokio::sync::RwLock::new(None)),
             scheduler_registry,
             job_history,
             job_manager,
@@ -105,25 +113,6 @@ impl Default for AppState {
     }
 }
 
-async fn shutdown_services(state: &AppState) {
-    log::info!("App exit: stopping background services...");
-
-    // Stop scheduler plugins first (each stops its own head/worker processes).
-    if let Some(ray) = state.ray_service.read().await.clone() {
-        ray.shutdown().await;
-    }
-    if let Some(dask) = state.dask_service.read().await.clone() {
-        dask.shutdown().await;
-    }
-
-    // Final sweep: any leftover background Python processes.
-    if let Some(python) = state.python_service.read().await.clone() {
-        python.shutdown().await;
-    }
-
-    log::info!("App exit: background services stopped.");
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -136,184 +125,10 @@ pub fn run() {
             let state = AppState::new(data_dir);
             app.manage(state);
 
-            // Load persisted job history and scheduler selection.
             {
                 let state = app.state::<AppState>();
-                let history = state.job_history.clone();
-                let registry = state.scheduler_registry.clone();
-                let job_manager = state.job_manager.clone();
-                tauri::async_runtime::block_on(async {
-                    history.load().await;
-                    registry.load_active().await;
-                    job_manager.load_persisted().await;
-                });
+                tauri::async_runtime::block_on(bootstrap::start(state.inner()));
             }
-
-            // Start the local HTTP + WebSocket API server (external clients: VS Code, CLI).
-            {
-                let state = app.state::<AppState>();
-                api_server::start(
-                    state.job_api.clone(),
-                    state.job_manager.clone(),
-                    state.scheduler_registry.clone(),
-                    state.python_service.clone(),
-                    state.dask_service.clone(),
-                    state.ray_service.clone(),
-                    state.event_bus.clone(),
-                    state.data_dir.clone(),
-                );
-            }
-
-            // Register built-in plugins so the UI can show them while async setup runs.
-            {
-                let registry_lock = app.state::<AppState>().plugin_registry.clone();
-                tauri::async_runtime::block_on(async {
-                    let mut registry = registry_lock.write().await;
-                    registry.register_python_runtime();
-                    registry.register_dask_scheduler();
-                    registry.register_ray();
-                });
-            }
-
-            // Kick off async Python Runtime + Dask initialization in the background.
-            let python_service_slot = app.state::<AppState>().python_service.clone();
-            let dask_service_slot = app.state::<AppState>().dask_service.clone();
-            let ray_service_slot = app.state::<AppState>().ray_service.clone();
-            let scheduler_registry = app.state::<AppState>().scheduler_registry.clone();
-            let registry_lock = app.state::<AppState>().plugin_registry.clone();
-
-            tauri::async_runtime::spawn(async move {
-                log::info!("Python Runtime: starting background initialization...");
-
-                match python_runtime::interpreter::discover_python().await {
-                    Some(interpreter) => {
-                        log::info!(
-                            "Python Runtime: found interpreter {} at {}",
-                            interpreter.version,
-                            interpreter.path.display()
-                        );
-
-                        let svc = PythonExecutionService::new(interpreter, None);
-
-                        match svc.initialize().await {
-                            Ok(()) => {
-                                log::info!("Python Runtime: service ready.");
-                                let python_arc = Arc::new(svc);
-                                *python_service_slot.write().await = Some(python_arc.clone());
-
-                                {
-                                    let mut registry = registry_lock.write().await;
-                                    registry.update_plugin_status(
-                                        "plugin-python-runtime",
-                                        plugin_registry::PluginStatus::Running,
-                                    );
-                                }
-
-                                // Initialize Dask on top of the ready Python runtime.
-                                log::info!("Dask Scheduler: starting initialization...");
-                                let dask = DaskService::new(python_arc.clone());
-                                match dask.initialize().await {
-                                    Ok(()) => {
-                                        log::info!("Dask Scheduler: service ready.");
-                                        let dask_arc = Arc::new(dask);
-                                        *dask_service_slot.write().await = Some(dask_arc.clone());
-                                        scheduler_registry
-                                            .register(Arc::new(DaskSchedulerAdapter::new(dask_arc)))
-                                            .await;
-                                        let mut registry = registry_lock.write().await;
-                                        registry.update_plugin_status(
-                                            "plugin-dask-scheduler",
-                                            plugin_registry::PluginStatus::Running,
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::error!(
-                                            "Dask Scheduler: initialization failed: {}",
-                                            e
-                                        );
-                                        let dask_arc = Arc::new(dask);
-                                        *dask_service_slot.write().await = Some(dask_arc.clone());
-                                        scheduler_registry
-                                            .register(Arc::new(DaskSchedulerAdapter::new(dask_arc)))
-                                            .await;
-                                        let mut registry = registry_lock.write().await;
-                                        registry.update_plugin_status(
-                                            "plugin-dask-scheduler",
-                                            plugin_registry::PluginStatus::Error,
-                                        );
-                                    }
-                                }
-
-                                log::info!("Ray: starting initialization...");
-                                let ray = RayService::new(python_arc);
-                                match ray.initialize().await {
-                                    Ok(()) => {
-                                        log::info!("Ray: service ready.");
-                                        let ray_arc = Arc::new(ray);
-                                        *ray_service_slot.write().await = Some(ray_arc.clone());
-                                        scheduler_registry
-                                            .register(Arc::new(RaySchedulerAdapter::new(ray_arc)))
-                                            .await;
-                                        let mut registry = registry_lock.write().await;
-                                        registry.update_plugin_status(
-                                            "plugin-ray",
-                                            plugin_registry::PluginStatus::Running,
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::error!("Ray: initialization failed: {}", e);
-                                        let ray_arc = Arc::new(ray);
-                                        *ray_service_slot.write().await = Some(ray_arc.clone());
-                                        scheduler_registry
-                                            .register(Arc::new(RaySchedulerAdapter::new(ray_arc)))
-                                            .await;
-                                        let mut registry = registry_lock.write().await;
-                                        registry.update_plugin_status(
-                                            "plugin-ray",
-                                            plugin_registry::PluginStatus::Error,
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                log::error!("Python Runtime: initialization failed: {}", e);
-                                let mut registry = registry_lock.write().await;
-                                registry.update_plugin_status(
-                                    "plugin-python-runtime",
-                                    plugin_registry::PluginStatus::Error,
-                                );
-                                registry.update_plugin_status(
-                                    "plugin-dask-scheduler",
-                                    plugin_registry::PluginStatus::Error,
-                                );
-                                registry.update_plugin_status(
-                                    "plugin-ray",
-                                    plugin_registry::PluginStatus::Error,
-                                );
-                            }
-                        }
-                    }
-                    None => {
-                        log::error!(
-                            "Python Runtime: no Python interpreter found. \
-                             Run `scripts/Setup-PythonRuntime.ps1` to install the bundled Python."
-                        );
-                        let mut registry = registry_lock.write().await;
-                        registry.update_plugin_status(
-                            "plugin-python-runtime",
-                            plugin_registry::PluginStatus::Error,
-                        );
-                        registry.update_plugin_status(
-                            "plugin-dask-scheduler",
-                            plugin_registry::PluginStatus::Error,
-                        );
-                        registry.update_plugin_status(
-                            "plugin-ray",
-                            plugin_registry::PluginStatus::Error,
-                        );
-                    }
-                }
-            });
 
             Ok(())
         })
@@ -408,13 +223,25 @@ pub fn run() {
             commands::scheduler_list,
             commands::scheduler_get_active,
             commands::scheduler_set_active,
+            // MPI Plugin
+            commands::mpi_ensure_toolchain,
+            commands::mpi_get_settings,
+            commands::mpi_update_settings,
+            commands::mpi_status,
+            // P2P
+            commands::p2p_local_peer_id,
+            commands::p2p_listen_addrs,
+            commands::p2p_connect,
+            // Updates (check + notify)
+            commands::check_for_updates,
+            commands::get_app_version,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 let state = app_handle.state::<AppState>();
-                tauri::async_runtime::block_on(shutdown_services(state.inner()));
+                tauri::async_runtime::block_on(bootstrap::shutdown_services(state.inner()));
             }
         });
 }

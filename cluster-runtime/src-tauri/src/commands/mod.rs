@@ -108,8 +108,11 @@ pub async fn get_cluster_summary(
 
 #[tauri::command]
 pub async fn get_cluster_peers(
-    _state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, crate::AppState>,
 ) -> Result<Vec<PeerInfo>, String> {
+    if let Some(p2p) = state.p2p_service.read().await.clone() {
+        return p2p.list_peers().await;
+    }
     Ok(Vec::new())
 }
 
@@ -961,5 +964,114 @@ pub async fn scheduler_set_active(
     plugin_id: String,
 ) -> Result<(), String> {
     state.job_api.scheduler_set_active(&plugin_id).await
+}
+
+// ─── MPI Plugin ───────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn mpi_ensure_toolchain(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::mpi::MpiToolchain, String> {
+    let svc = state
+        .mpi_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    svc.ensure_toolchain()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mpi_get_settings(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<crate::mpi::settings::MpiSettings, String> {
+    let svc = state
+        .mpi_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    Ok(svc.settings().await)
+}
+
+#[tauri::command]
+pub async fn mpi_update_settings(
+    state: tauri::State<'_, crate::AppState>,
+    settings: crate::mpi::settings::MpiSettings,
+) -> Result<(), String> {
+    let svc = state
+        .mpi_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    svc.update_settings(settings).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn mpi_status(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<serde_json::Value, String> {
+    let svc = state
+        .mpi_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    let tc = svc.toolchain().await;
+    Ok(serde_json::json!({
+        "ready": svc.is_ready().await,
+        "toolchain": tc,
+    }))
+}
+
+#[tauri::command]
+pub async fn p2p_local_peer_id(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Option<String>, String> {
+    Ok(state
+        .p2p_service
+        .read()
+        .await
+        .as_ref()
+        .map(|p| p.local_peer_id().to_string()))
+}
+
+#[tauri::command]
+pub async fn p2p_listen_addrs(
+    state: tauri::State<'_, crate::AppState>,
+) -> Result<Vec<String>, String> {
+    if let Some(p2p) = state.p2p_service.read().await.clone() {
+        return p2p.listen_addrs().await;
+    }
+    Ok(Vec::new())
+}
+
+#[tauri::command]
+pub async fn p2p_connect(
+    state: tauri::State<'_, crate::AppState>,
+    multiaddr: String,
+) -> Result<(), String> {
+    let p2p = state
+        .p2p_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "P2P not started".to_string())?;
+    p2p.connect(&multiaddr).await
+}
+
+// ─── Updates (check + notify) ─────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn check_for_updates() -> Result<crate::updates::UpdateCheckResult, String> {
+    crate::updates::check_for_updates().await
+}
+
+#[tauri::command]
+pub fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }
 

@@ -60,6 +60,7 @@ pub fn router(ctx: ApiContext) -> Router {
         .route("/jobs/:id/retry", post(retry_job))
         .route("/logs", get(get_logs))
         .route("/events", get(ws::events))
+        .route("/peers", get(list_peers).post(connect_peer))
         .route_layer(middleware::from_fn_with_state(ctx.clone(), auth::require_token));
 
     Router::new()
@@ -174,6 +175,8 @@ async fn get_nodes(State(ctx): State<ApiContext>) -> ApiResult<Value> {
 #[serde(rename_all = "camelCase")]
 struct SubmitQuery {
     owner: Option<String>,
+    /// When set, forward the job to a remote peer over libp2p.
+    target_peer: Option<String>,
 }
 
 async fn submit_job(
@@ -182,6 +185,19 @@ async fn submit_job(
     Json(spec): Json<JobSpec>,
 ) -> ApiResult<Value> {
     let owner = q.owner.unwrap_or_else(|| "vscode".to_string());
+    if let Some(peer) = q.target_peer.filter(|s| !s.is_empty()) {
+        let p2p = ctx
+            .p2p_service
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "P2P not started"))?;
+        let ack = p2p
+            .remote_submit(&peer, &owner, spec)
+            .await
+            .map_err(ApiError::internal)?;
+        return Ok(Json(json!(ack)));
+    }
     let ack = ctx
         .job_api
         .submit(spec, &owner)
@@ -237,6 +253,45 @@ async fn retry_job(
 
 async fn get_logs() -> Json<Value> {
     Json(json!(crate::logging::mock_logs()))
+}
+
+async fn list_peers(State(ctx): State<ApiContext>) -> ApiResult<Value> {
+    let Some(p2p) = ctx.p2p_service.read().await.clone() else {
+        return Ok(Json(json!({
+            "localPeerId": null,
+            "listenAddrs": [],
+            "peers": [],
+        })));
+    };
+    let peers = p2p.list_peers().await.map_err(ApiError::internal)?;
+    let listen_addrs = p2p.listen_addrs().await.unwrap_or_default();
+    Ok(Json(json!({
+        "localPeerId": p2p.local_peer_id(),
+        "listenAddrs": listen_addrs,
+        "peers": peers,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectPeerBody {
+    multiaddr: String,
+}
+
+async fn connect_peer(
+    State(ctx): State<ApiContext>,
+    Json(body): Json<ConnectPeerBody>,
+) -> ApiResult<Value> {
+    let p2p = ctx
+        .p2p_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "P2P not started"))?;
+    p2p.connect(&body.multiaddr)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "connected": body.multiaddr })))
 }
 
 #[cfg(test)]

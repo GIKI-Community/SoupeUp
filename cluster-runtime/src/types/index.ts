@@ -135,6 +135,7 @@ export interface SubmitAck {
 export function schedulerDisplayName(pluginId: string): string {
   if (pluginId.includes("dask")) return "Dask";
   if (pluginId.includes("ray")) return "Ray";
+  if (pluginId.includes("mpi")) return "MPI";
   return pluginId;
 }
 
@@ -271,6 +272,18 @@ export interface AppSettings {
   enableRemote: boolean;
   authEnabled: boolean;
   tlsEnabled: boolean;
+  /** When true, check GitHub Releases for updates on startup. */
+  autoCheckUpdates: boolean;
+}
+
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  releaseUrl?: string | null;
+  releaseNotes?: string | null;
+  checkedAt: string;
+  message: string;
 }
 
 // ─── Dask Scheduler Plugin ────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ use tokio::sync::{broadcast, RwLock};
 use crate::dask::DaskService;
 use crate::events::{ClusterEvent, EventBus, EventHandler};
 use crate::jobs::{JobApi, JobManager};
+use crate::network::p2p::P2pService;
 use crate::python_runtime::PythonExecutionService;
 use crate::ray::RayService;
 use crate::scheduler::SchedulerRegistry;
@@ -37,6 +38,7 @@ pub struct ApiContext {
     pub python_service: ServiceSlot<PythonExecutionService>,
     pub dask_service: ServiceSlot<DaskService>,
     pub ray_service: ServiceSlot<RayService>,
+    pub p2p_service: ServiceSlot<P2pService>,
     pub token: Arc<String>,
     /// Serialized `ClusterEvent`s fanned out to connected WebSocket clients.
     pub events_tx: broadcast::Sender<String>,
@@ -81,6 +83,7 @@ pub fn start(
     python_service: ServiceSlot<PythonExecutionService>,
     dask_service: ServiceSlot<DaskService>,
     ray_service: ServiceSlot<RayService>,
+    p2p_service: ServiceSlot<P2pService>,
     event_bus: Arc<EventBus>,
     data_dir: PathBuf,
 ) {
@@ -99,6 +102,7 @@ pub fn start(
         python_service,
         dask_service,
         ray_service,
+        p2p_service,
         token: Arc::new(token.clone()),
         events_tx,
     };
@@ -106,7 +110,8 @@ pub fn start(
     let addr = std::env::var("CLUSTER_RUNTIME_API_ADDR")
         .unwrap_or_else(|_| DEFAULT_ADDR.to_string());
 
-    tauri::async_runtime::spawn(async move {
+    // Tokio so this works under both Tauri's runtime and the headless binary.
+    tokio::spawn(async move {
         let listener = match tokio::net::TcpListener::bind(&addr).await {
             Ok(l) => l,
             Err(e) => {

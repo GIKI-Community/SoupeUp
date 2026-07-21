@@ -92,6 +92,14 @@ pub enum EntryPoint {
         #[serde(default)]
         args: Option<serde_json::Value>,
     },
+    /// Native MPI launch via `mpirun` / `mpiexec`.
+    MpiExecutable {
+        executable: String,
+        #[serde(default)]
+        ranks: Option<u32>,
+        #[serde(default)]
+        hostfile: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -158,6 +158,30 @@ impl PluginRegistry {
             },
         );
     }
+
+    /// Register the MPI Plugin (native mpirun/mpiexec; independent of Python).
+    pub fn register_mpi(&mut self) {
+        let id = "plugin-mpi".to_string();
+        self.info.insert(
+            id.clone(),
+            PluginInfo {
+                id,
+                name: "MPI".to_string(),
+                version: "0.1.0".to_string(),
+                status: PluginStatus::Initializing,
+                author: "Cluster Runtime Team".to_string(),
+                description: "Message Passing Interface jobs via mpirun/mpiexec \
+                               (OpenMPI, MPICH, or Microsoft MPI)."
+                    .to_string(),
+                capabilities: vec![
+                    "MPI Launch".to_string(),
+                    "Multi-rank Jobs".to_string(),
+                    "Process Group Cancel".to_string(),
+                ],
+                plugin_type: "Scheduler".to_string(),
+            },
+        );
+    }
 }
 
 impl Default for PluginRegistry {

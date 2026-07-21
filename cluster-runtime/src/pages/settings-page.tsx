@@ -14,8 +14,10 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { useDaskStore, useJobsStore, usePythonRuntimeStore, useRayStore } from "@/stores";
-import type { DaskSettings, RaySettings } from "@/types";
+import { useDaskStore, useJobsStore, usePythonRuntimeStore, useRayStore, useSettingsStore } from "@/stores";
+import type { DaskSettings, RaySettings, UpdateCheckResult } from "@/types";
+import { UpdateApi } from "@/api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Select,
   SelectContent,
@@ -564,25 +566,116 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="updates">
-          <Card className="border-border/60 bg-card/50 shadow-sm">
-            <CardHeader>
-              <CardTitle>Updates</CardTitle>
-              <CardDescription>Configure automatic updates.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <Switch id="auto-update" defaultChecked />
-                <Label htmlFor="auto-update">
-                  Check for updates automatically
-                </Label>
-              </div>
-              <div className="pt-4">
-                <Button variant="secondary">Check for Updates Now</Button>
-              </div>
-            </CardContent>
-          </Card>
+          <UpdatesSettings />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+function UpdatesSettings() {
+  const autoCheckUpdates =
+    useSettingsStore((s) => s.settings.autoCheckUpdates) ?? true;
+  const updateSettings = useSettingsStore((s) => s.updateSettings);
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>("…");
+
+  useEffect(() => {
+    void UpdateApi.getVersion()
+      .then(setCurrentVersion)
+      .catch(() => setCurrentVersion("unknown"));
+  }, []);
+
+  const runCheck = async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const r = await UpdateApi.check();
+      setResult(r);
+    } catch (e) {
+      setResult(null);
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <Card className="border-border/60 bg-card/50 shadow-sm">
+      <CardHeader>
+        <CardTitle>Updates</CardTitle>
+        <CardDescription>
+          Check GitHub Releases for a newer Cluster Runtime version. Updates are
+          notify-only — download and install from the release page.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="text-sm text-muted-foreground">
+          Current version:{" "}
+          <span className="font-medium text-foreground">v{currentVersion}</span>
+        </div>
+        <div className="flex items-center space-x-2">
+          <Switch
+            id="auto-update"
+            checked={autoCheckUpdates}
+            onCheckedChange={(checked) =>
+              updateSettings({ autoCheckUpdates: checked })
+            }
+          />
+          <Label htmlFor="auto-update">
+            Check for updates automatically on startup
+          </Label>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button
+            variant="secondary"
+            disabled={checking}
+            onClick={() => {
+              void runCheck();
+            }}
+          >
+            {checking ? "Checking…" : "Check for Updates Now"}
+          </Button>
+          {result?.updateAvailable && result.releaseUrl && (
+            <Button
+              onClick={() => {
+                void openUrl(result.releaseUrl!);
+              }}
+            >
+              Open release page
+            </Button>
+          )}
+        </div>
+        {error && (
+          <p className="text-sm text-destructive" role="alert">
+            {error}
+          </p>
+        )}
+        {result && !error && (
+          <div className="rounded-md border border-border/60 bg-background/60 p-3 text-sm">
+            <div className="flex items-center gap-2">
+              {result.updateAvailable ? (
+                <Badge variant="default">Update available</Badge>
+              ) : (
+                <Badge variant="secondary">Up to date</Badge>
+              )}
+              <span>{result.message}</span>
+            </div>
+            {result.latestVersion && (
+              <p className="mt-2 text-muted-foreground">
+                Latest release: v{result.latestVersion}
+              </p>
+            )}
+            {result.updateAvailable && result.releaseNotes && (
+              <pre className="mt-3 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">
+                {result.releaseNotes}
+              </pre>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

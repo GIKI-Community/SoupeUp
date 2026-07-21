@@ -1,16 +1,16 @@
 //! Network layer for cluster communication
-//! 
-//! This module provides a complete networking stack for peer-to-peer
-//! cluster communication including discovery, authentication, and
-//! message passing.
+//!
+//! Legacy UDP/TCP modules remain for reference; the active WAN plane is
+//! [`p2p`] (libp2p on firewall-friendly ports).
 
-pub mod messages;
-pub mod transport;
 pub mod authentication;
+pub mod cluster;
 pub mod discovery;
 pub mod heartbeat;
-pub mod cluster;
+pub mod messages;
+pub mod p2p;
 pub mod peers;
+pub mod transport;
 
 
 
