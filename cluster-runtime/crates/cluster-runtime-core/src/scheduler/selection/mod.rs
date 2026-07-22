@@ -53,15 +53,32 @@ impl SchedulerRegistry {
     }
 
     /// After plugins register, ensure `active` points at a registered scheduler.
+    /// Preference: current active if registered → fallback_id → Dask → Ray → MPI → any.
     pub async fn ensure_active_registered(&self, fallback_id: &str) {
         let active = self.active_id().await;
-        let ok = self.schedulers.read().await.contains_key(&active);
-        if !ok {
-            if self.schedulers.read().await.contains_key(fallback_id) {
-                let _ = self.set_active(fallback_id).await;
-            } else if let Some(first) = self.schedulers.read().await.keys().next().cloned() {
-                let _ = self.set_active(&first).await;
+        if self.schedulers.read().await.contains_key(&active) {
+            return;
+        }
+
+        let preferred = [
+            fallback_id,
+            DASK_PLUGIN_ID,
+            RAY_PLUGIN_ID,
+            MPI_PLUGIN_ID,
+        ];
+        for id in preferred {
+            if self.schedulers.read().await.contains_key(id) {
+                log::info!("scheduler: active '{active}' missing; selecting '{id}'");
+                let _ = self.set_active(id).await;
+                return;
             }
+        }
+
+        if let Some(first) = self.schedulers.read().await.keys().next().cloned() {
+            log::warn!("scheduler: falling back to first registered '{first}'");
+            let _ = self.set_active(&first).await;
+        } else {
+            log::error!("scheduler: no schedulers registered; active stays '{active}'");
         }
     }
 

@@ -19,6 +19,7 @@ impl PythonInterpreter {
     /// produces unrecognisable output.
     pub async fn probe(path: &Path, is_bundled: bool) -> Option<Self> {
         if !path.exists() {
+            log::debug!("Python probe skip (missing): {}", path.display());
             return None;
         }
 
@@ -28,13 +29,30 @@ impl PythonInterpreter {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
-            .await
-            .ok()?;
+            .await;
+
+        let output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                log::warn!("Python probe failed to exec {}: {e}", path.display());
+                return None;
+            }
+        };
 
         let combined = String::from_utf8_lossy(&output.stdout).to_string()
             + &String::from_utf8_lossy(&output.stderr);
 
-        let version = parse_python_version(&combined)?;
+        let version = match parse_python_version(&combined) {
+            Some(v) => v,
+            None => {
+                log::warn!(
+                    "Python probe unrecognised version output from {}: {}",
+                    path.display(),
+                    combined.trim()
+                );
+                return None;
+            }
+        };
 
         // Require Python 3.x
         if !version.starts_with('3') {
@@ -52,6 +70,32 @@ impl PythonInterpreter {
 
 // ─── Discovery Strategies ─────────────────────────────────────────────────────
 
+/// Explicit interpreter from `CLUSTER_RUNTIME_PYTHON` if set.
+pub async fn env_python() -> Option<PythonInterpreter> {
+    let raw = std::env::var("CLUSTER_RUNTIME_PYTHON").ok()?;
+    let path = PathBuf::from(raw.trim());
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    match PythonInterpreter::probe(&path, false).await {
+        Some(interp) => {
+            log::info!(
+                "CLUSTER_RUNTIME_PYTHON: {} ({})",
+                interp.path.display(),
+                interp.version
+            );
+            Some(interp)
+        }
+        None => {
+            log::error!(
+                "CLUSTER_RUNTIME_PYTHON points to unusable interpreter: {}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Try to use the bundled Python 3.10 distribution shipped inside the app.
 ///
 /// The bundled distribution should be placed at:
@@ -62,7 +106,7 @@ impl PythonInterpreter {
 pub async fn embedded_python() -> Option<PythonInterpreter> {
     let base = bundled_python_dir()?;
 
-    log::debug!("Looking for bundled Python in {}", base.display());
+    log::info!("Looking for bundled Python in {}", base.display());
 
     // python-build-standalone layout on Windows:
     //   python/python.exe  (install_only flavour)
@@ -77,6 +121,8 @@ pub async fn embedded_python() -> Option<PythonInterpreter> {
         vec![
             base.join("bin").join("python3"),
             base.join("bin").join("python"),
+            base.join("python3"),
+            base.join("python"),
         ]
     };
 
@@ -91,47 +137,90 @@ pub async fn embedded_python() -> Option<PythonInterpreter> {
         }
     }
 
-    log::debug!("Bundled Python not found in {}", base.display());
+    log::warn!("Bundled Python directory exists but no usable binary in {}", base.display());
     None
 }
 
-/// Search the system PATH for a usable Python 3.x interpreter.
-/// Prefers 3.10 on Windows (Dask + Ray compatibility), then newer versions.
+/// Search the system PATH (and well-known absolute paths) for Python 3.x.
 pub async fn find_existing_python() -> Option<PythonInterpreter> {
-    let candidates: &[&str] = if cfg!(windows) {
-        &[
-            "python3.10.exe", "python3.11.exe", "python3.12.exe",
-            "python3.13.exe", "python3.exe", "python.exe",
-        ]
-    } else {
-        &["python3.10", "python3.11", "python3.12", "python3.13", "python3", "python"]
-    };
+    let mut candidates: Vec<PathBuf> = Vec::new();
 
-    for name in candidates {
-        if let Some(path) = which(name) {
-            if let Some(interp) = PythonInterpreter::probe(&path, false).await {
-                log::info!(
-                    "System Python {} found at {}",
-                    interp.version,
-                    interp.path.display()
-                );
-                return Some(interp);
+    #[cfg(windows)]
+    {
+        for name in [
+            "python3.10.exe",
+            "python3.11.exe",
+            "python3.12.exe",
+            "python3.13.exe",
+            "python3.exe",
+            "python.exe",
+        ] {
+            if let Some(p) = which(name) {
+                candidates.push(p);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        for abs in [
+            "/usr/bin/python3",
+            "/usr/local/bin/python3",
+            "/bin/python3",
+            "/usr/bin/python3.12",
+            "/usr/bin/python3.11",
+            "/usr/bin/python3.10",
+        ] {
+            candidates.push(PathBuf::from(abs));
+        }
+        for name in [
+            "python3.12",
+            "python3.11",
+            "python3.10",
+            "python3.13",
+            "python3",
+            "python",
+        ] {
+            if let Some(p) = which(name) {
+                candidates.push(p);
+            }
+            if let Some(p) = which_cmd(name).await {
+                candidates.push(p);
             }
         }
     }
 
+    // Dedup while preserving order.
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|p| seen.insert(p.clone()));
+
+    log::info!(
+        "System Python: probing {} candidate(s)",
+        candidates.len()
+    );
+
+    for path in candidates {
+        if let Some(interp) = PythonInterpreter::probe(&path, false).await {
+            log::info!(
+                "System Python {} found at {}",
+                interp.version,
+                interp.path.display()
+            );
+            return Some(interp);
+        }
+    }
+
+    log::error!(
+        "No system Python 3.x found. On Ubuntu: `sudo apt install -y python3 python3-venv python3-pip`. \
+         Or set CLUSTER_RUNTIME_PYTHON=/path/to/python3"
+    );
     None
 }
 
 /// Placeholder for a future automatic Python download capability.
-///
-/// This function exists so that the discovery pipeline has a clear extension
-/// point.  A future milestone can implement downloading python-build-standalone
-/// and slot it here without touching any callers.
 pub async fn future_download(_version: &str) -> Result<PythonInterpreter, PythonError> {
     Err(PythonError::InterpreterNotFound(
         "Automatic Python download is not yet implemented. \
-         Run `scripts/Setup-PythonRuntime.ps1` to stage the bundled Python distribution."
+         Install system Python 3, set CLUSTER_RUNTIME_PYTHON, or stage a bundled distribution."
             .to_string(),
     ))
 }
@@ -139,21 +228,22 @@ pub async fn future_download(_version: &str) -> Result<PythonInterpreter, Python
 /// Discover the best available Python interpreter.
 ///
 /// Priority order:
-///   1. Bundled Python (python-build-standalone, inside the app)
-///   2. System Python on PATH
-///   3. `future_download()` — currently always fails
+///   1. `CLUSTER_RUNTIME_PYTHON`
+///   2. Bundled Python (python-build-standalone, inside the app)
+///   3. System Python on PATH / well-known paths
 pub async fn discover_python() -> Option<PythonInterpreter> {
-    // 1. Bundled (preferred: zero external dependencies)
+    if let Some(interp) = env_python().await {
+        return Some(interp);
+    }
+
     if let Some(interp) = embedded_python().await {
         return Some(interp);
     }
 
     log::warn!(
-        "Bundled Python not found. Falling back to system Python. \
-         Run `scripts/Setup-PythonRuntime.ps1` to set up the bundled distribution."
+        "Bundled Python not found. Falling back to system Python."
     );
 
-    // 2. System PATH
     find_existing_python().await
 }
 
@@ -164,10 +254,34 @@ fn which(name: &str) -> Option<PathBuf> {
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join(name);
-            if candidate.exists() {
+            if candidate.is_file() || candidate.exists() {
                 return Some(candidate);
             }
         }
     }
+    None
+}
+
+/// Ask the OS `which` binary (more reliable for symlinks / wrappers on Linux).
+#[cfg(not(windows))]
+async fn which_cmd(name: &str) -> Option<PathBuf> {
+    let output = tokio::process::Command::new("which")
+        .arg(name)
+        .output()
+        .await
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let line = String::from_utf8_lossy(&output.stdout);
+    let first = line.lines().next()?.trim();
+    if first.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(first))
+}
+
+#[cfg(windows)]
+async fn which_cmd(_name: &str) -> Option<PathBuf> {
     None
 }

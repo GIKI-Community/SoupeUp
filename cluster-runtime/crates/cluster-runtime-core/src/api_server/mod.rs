@@ -124,19 +124,52 @@ pub fn start(
             .local_addr()
             .map(|a| a.to_string())
             .unwrap_or_else(|_| addr.clone());
-        let url = format!("http://{bound}");
 
+        // When binding 0.0.0.0 / ::, clients need a reachable advertise URL.
+        let url = advertise_url(&bound);
+
+        let endpoint_path = data_dir.join("api").join("endpoint.json");
         if let Err(e) = write_endpoint_file(&data_dir, &url, &token).await {
             log::warn!("API server: could not write discovery file: {e}");
         }
 
-        log::info!("API server: listening on {url}");
+        log::info!("API server: listening on http://{bound}");
+        log::info!("API server: client URL {url}");
+        log::info!("API server: discovery file {}", endpoint_path.display());
+        log::info!("API server: bearer token {token}");
+        log::info!(
+            "API server: try  curl -s {url}/health  &&  curl -s -H \"Authorization: Bearer {token}\" {url}/v1/schedulers"
+        );
+        if bound.starts_with("127.") || bound.starts_with("[::1]") {
+            log::info!(
+                "API server: bound to loopback only. For LAN access set \
+                 CLUSTER_RUNTIME_API_ADDR=0.0.0.0:8129 and optionally \
+                 CLUSTER_RUNTIME_API_PUBLIC_URL=http://<server-ip>:8129"
+            );
+        }
 
         let app = routes::router(ctx);
         if let Err(e) = axum::serve(listener, app).await {
             log::error!("API server: stopped with error: {e}");
         }
     });
+}
+
+/// Prefer `CLUSTER_RUNTIME_API_PUBLIC_URL`, else rewrite wildcard binds to localhost.
+fn advertise_url(bound: &str) -> String {
+    if let Ok(public) = std::env::var("CLUSTER_RUNTIME_API_PUBLIC_URL") {
+        let trimmed = public.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(port) = bound.strip_prefix("0.0.0.0:") {
+        return format!("http://127.0.0.1:{port}");
+    }
+    if let Some(port) = bound.strip_prefix("[::]:") {
+        return format!("http://127.0.0.1:{port}");
+    }
+    format!("http://{bound}")
 }
 
 async fn write_endpoint_file(

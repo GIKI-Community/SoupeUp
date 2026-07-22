@@ -37,12 +37,21 @@ pub fn save(data_dir: &Path, cfg: &EnabledConfig) -> Result<(), String> {
     std::fs::write(p, json).map_err(|e| e.to_string())
 }
 
-/// Mandatory plugins are always enabled. Missing keys default to enabled for shipped plugins.
+/// Mandatory plugins are always enabled.
+/// Optional plugins: missing keys default to **enabled** for Ray/Dask-era UX, except MPI
+/// which defaults to **disabled** until a toolchain is installed (avoids boot noise).
 pub fn is_enabled(cfg: &EnabledConfig, manifest: &PluginManifest) -> bool {
     if manifest.mandatory {
         return true;
     }
-    cfg.enabled.get(&manifest.id).copied().unwrap_or(true)
+    if let Some(v) = cfg.enabled.get(&manifest.id) {
+        return *v;
+    }
+    // Fresh install: don't auto-start MPI without mpirun/mpiexec.
+    if manifest.id == "plugin-mpi" {
+        return false;
+    }
+    true
 }
 
 pub fn set_enabled(

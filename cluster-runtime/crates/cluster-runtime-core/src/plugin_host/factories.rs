@@ -90,6 +90,7 @@ pub async fn stop_plugin(id: &str, state: &AppState) -> Result<(), String> {
 }
 
 async fn start_python(ctx: &PluginStartContext<'_>) -> Result<(), String> {
+    log::info!("plugins: starting plugin-python-runtime (factory)");
     {
         let mut reg = ctx.state.plugin_registry.write().await;
         reg.update_plugin_status("plugin-python-runtime", PluginStatus::Initializing);
@@ -98,13 +99,23 @@ async fn start_python(ctx: &PluginStartContext<'_>) -> Result<(), String> {
     let interpreter = python_runtime::interpreter::discover_python()
         .await
         .ok_or_else(|| {
-            "No Python interpreter found. Run scripts/Setup-PythonRuntime.ps1.".to_string()
+            "No Python interpreter found. On Ubuntu: `sudo apt install -y python3 python3-venv python3-pip`. \
+             Or set CLUSTER_RUNTIME_PYTHON=/usr/bin/python3"
+                .to_string()
         })?;
 
+    log::info!(
+        "plugins: using Python {} at {} (bundled={})",
+        interpreter.version,
+        interpreter.path.display(),
+        interpreter.is_bundled
+    );
+
     let svc = PythonExecutionService::new(interpreter, None);
-    svc.initialize()
-        .await
-        .map_err(|e| e.to_string())?;
+    svc.initialize().await.map_err(|e| {
+        log::error!("plugins: Python initialize failed: {e}");
+        e.to_string()
+    })?;
     let python_arc = Arc::new(svc);
     *ctx.state.python_service.write().await = Some(python_arc.clone());
 
@@ -115,6 +126,7 @@ async fn start_python(ctx: &PluginStartContext<'_>) -> Result<(), String> {
 
     let mut reg = ctx.state.plugin_registry.write().await;
     reg.update_plugin_status("plugin-python-runtime", PluginStatus::Running);
+    log::info!("plugins: plugin-python-runtime Running");
     Ok(())
 }
 
@@ -204,26 +216,30 @@ async fn start_mpi(ctx: &PluginStartContext<'_>) -> Result<(), String> {
     let has_python = ctx.state.python_service.read().await.is_some();
     if let Some(python) = ctx.state.python_service.read().await.clone() {
         mpi.set_python(Some(python)).await;
-    } else {
-        log::warn!("plugins: plugin-mpi started without Python (mpi4py jobs unavailable until Python is ready)");
     }
+
+    // Always keep the service slot so mpi_ensure_toolchain / status can retry.
     *ctx.state.mpi_service.write().await = Some(mpi.clone());
-    ctx.state
-        .scheduler_registry
-        .register(Arc::new(MpiSchedulerAdapter::new(mpi)))
-        .await;
 
     let mut reg = ctx.state.plugin_registry.write().await;
     match init_ok {
         Ok(()) => {
+            drop(reg);
+            ctx.state
+                .scheduler_registry
+                .register(Arc::new(MpiSchedulerAdapter::new(mpi)))
+                .await;
+            let mut reg = ctx.state.plugin_registry.write().await;
             log::info!("plugins: plugin-mpi Running (has_python={has_python})");
             reg.update_plugin_status("plugin-mpi", PluginStatus::Running);
             Ok(())
         }
         Err(e) => {
-            // Still register so UI can show Error + retry via mpi_ensure_toolchain.
+            // Do NOT register as a scheduler while the toolchain is missing —
+            // otherwise HashMap fallback can make broken MPI the active scheduler.
             log::error!(
-                "plugins: plugin-mpi Error — toolchain init failed: {e} (scheduler still registered; has_python={has_python})"
+                "plugins: plugin-mpi Error — toolchain init failed: {e} \
+                 (not registered as scheduler; install openmpi-bin or mpich, has_python={has_python})"
             );
             reg.update_plugin_status("plugin-mpi", PluginStatus::Error);
             Err(e.to_string())
