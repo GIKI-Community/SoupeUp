@@ -22,5 +22,4 @@ pub mod types;
 pub mod worker;
 
 pub use services::DaskService;
-pub use services::example_failure;
 pub use types::*;

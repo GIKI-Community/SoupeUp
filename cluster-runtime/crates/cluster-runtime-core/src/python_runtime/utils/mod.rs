@@ -35,28 +35,40 @@ pub fn environments_base_dir() -> PathBuf {
 
 /// Directory where the bundled Python distribution is expected.
 ///
-/// Production: `<install_dir>/python/`         (from tauri bundle resources)
-/// Dev mode:   `<exe_dir>/../../resources/python/`  (src-tauri/resources/python/)
+/// Search order:
+/// 1. `$CLUSTER_RUNTIME_PYTHON_DIR` if set
+/// 2. `<exe_dir>/python/` (production / next to binary)
+/// 3. Walk parents looking for `resources/python` or `src-tauri/resources/python`
 pub fn bundled_python_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("CLUSTER_RUNTIME_PYTHON_DIR") {
+        let p = PathBuf::from(dir);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+
     let exe = exe_dir();
 
-    // 1. Next to the executable (production after `tauri build`)
     let prod = exe.join("python");
     if prod.exists() {
         return Some(prod);
     }
 
-    // 2. src-tauri/resources/python/ (dev mode: exe is at target/debug/)
-    //    exe → target/debug → target → src-tauri → resources/python
-    let dev = exe
-        .parent()          // target/
-        .and_then(|p| p.parent()) // src-tauri/
-        .map(|p| p.join("resources").join("python"));
-
-    if let Some(dev_path) = dev {
-        if dev_path.exists() {
-            return Some(dev_path);
+    // Walk up from the binary (workspace target/, src-tauri/target/, install dir).
+    let mut cur = exe.as_path();
+    for _ in 0..8 {
+        for candidate in [
+            cur.join("resources").join("python"),
+            cur.join("src-tauri").join("resources").join("python"),
+        ] {
+            if candidate.exists() {
+                return Some(candidate);
+            }
         }
+        cur = match cur.parent() {
+            Some(p) => p,
+            None => break,
+        };
     }
 
     None

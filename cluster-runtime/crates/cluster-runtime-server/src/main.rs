@@ -3,12 +3,12 @@
 //! Starts the same Python / Dask / Ray stack and loopback HTTP API as the
 //! desktop app. Do not run this alongside the Tauri GUI on the same port.
 
-use cluster_runtime_lib::bootstrap::{self, resolve_data_dir};
-use cluster_runtime_lib::AppState;
+use cluster_runtime_core::bootstrap::{self, resolve_data_dir};
+use cluster_runtime_core::AppState;
 
 #[tokio::main]
 async fn main() {
-    cluster_runtime_lib::logging::init();
+    cluster_runtime_core::logging::init();
 
     let data_dir = resolve_data_dir();
     log::info!(

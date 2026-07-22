@@ -5,9 +5,11 @@
 use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
-use serde::{Deserialize, Serialize};
 
 /// Discovery message sent over UDP
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,13 +70,19 @@ impl Discovery {
         node_name: String,
         runtime_port: u16,
     ) -> Result<Self, std::io::Error> {
-        let socket = UdpSocket::bind(format!("0.0.0.0:{}", config.discovery_port))?;
-        socket.set_broadcast(true)?;
-        
-        // Allow reuse of the address
+        let addr: SocketAddr = format!("0.0.0.0:{}", config.discovery_port).parse().map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e)
+        })?;
+
+        // SO_REUSEADDR must be set before bind (especially on Linux).
+        let sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+        sock.set_reuse_address(true)?;
         #[cfg(unix)]
-        socket.set_reuse_address(true)?;
-        
+        sock.set_reuse_port(true)?;
+        sock.bind(&addr.into())?;
+        sock.set_broadcast(true)?;
+        let socket: UdpSocket = sock.into();
+
         Ok(Self {
             config,
             socket: Arc::new(socket),

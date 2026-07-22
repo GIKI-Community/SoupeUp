@@ -252,7 +252,7 @@ async fn retry_job(
 }
 
 async fn get_logs() -> Json<Value> {
-    Json(json!(crate::logging::mock_logs()))
+    Json(json!(crate::logging::recent_logs()))
 }
 
 async fn list_peers(State(ctx): State<ApiContext>) -> ApiResult<Value> {

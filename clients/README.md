@@ -61,7 +61,7 @@ Headless run (from `cluster-runtime/`):
 
 ```bash
 pnpm server:dev      # cargo run --bin cluster-runtime-server
-pnpm server:build    # release binary under src-tauri/target/release/
+pnpm server:build    # release binary under target/release/cluster-runtime-server
 ```
 
 ### Endpoint reference

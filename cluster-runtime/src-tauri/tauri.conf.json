@@ -36,7 +36,7 @@
     ],
     "resources": {
       "resources/python/*": "python/",
-      "resources/plugins/**/*": "plugins/"
+      "../crates/cluster-runtime-core/resources/plugins/**/*": "plugins/"
     }
   }
 }

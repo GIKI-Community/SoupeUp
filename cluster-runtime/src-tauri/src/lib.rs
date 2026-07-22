@@ -1,122 +1,17 @@
 #![allow(dead_code)]
 
+use std::path::PathBuf;
+
 use tauri::Manager;
 
-mod api_server;
-pub mod bootstrap;
+use cluster_runtime_core::bootstrap;
+use cluster_runtime_core::AppState;
+
 mod commands;
-mod config;
-mod core;
-mod dask;
-mod mpi;
-mod ray;
-mod events;
-mod jobs;
-pub mod logging;
-mod metrics;
-mod network;
-mod nodes;
-mod scheduler;
-mod sdk;
-mod security;
-mod storage;
-mod updates;
-
-pub mod plugin_api;
-pub mod plugin_host;
-pub mod plugin_loader;
-pub mod plugin_registry;
-pub mod plugin_security;
-pub mod plugin_store;
-pub mod python_runtime;
-pub mod runtime;
-
-use std::path::PathBuf;
-use std::sync::Arc;
-use dask::DaskService;
-use events::EventBus;
-use jobs::{JobApi, JobHistoryStore, JobManager};
-use jobs::progress::ProgressTracker;
-use jobs::results::ResultStore;
-use mpi::MpiService;
-use plugin_registry::PluginRegistry;
-use python_runtime::PythonExecutionService;
-use ray::RayService;
-use scheduler::SchedulerRegistry;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub plugin_registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
-    pub event_bus: Arc<EventBus>,
-    /// The Python Runtime service. `None` while the runtime is still initializing.
-    pub python_service: Arc<tokio::sync::RwLock<Option<Arc<PythonExecutionService>>>>,
-    /// The Dask Scheduler service. `None` until Python is ready and packages are installed.
-    pub dask_service: Arc<tokio::sync::RwLock<Option<Arc<DaskService>>>>,
-    /// The Ray service. `None` until Python is ready and packages are installed.
-    pub ray_service: Arc<tokio::sync::RwLock<Option<Arc<RayService>>>>,
-    /// The MPI service. Initialized independently of Python.
-    pub mpi_service: Arc<tokio::sync::RwLock<Option<Arc<MpiService>>>>,
-    /// WAN libp2p mesh (optional until started).
-    pub p2p_service: Arc<tokio::sync::RwLock<Option<Arc<crate::network::p2p::P2pService>>>>,
-    pub scheduler_registry: Arc<SchedulerRegistry>,
-    pub job_history: Arc<JobHistoryStore>,
-    pub job_manager: Arc<JobManager>,
-    pub job_api: Arc<JobApi>,
-    pub data_dir: PathBuf,
-}
-
-impl AppState {
-    pub fn new(data_dir: PathBuf) -> Self {
-        let event_bus = Arc::new(EventBus::default());
-        let scheduler_registry = Arc::new(SchedulerRegistry::new(
-            data_dir.join("scheduler").join("active_scheduler.json"),
-        ));
-        let job_history = Arc::new(JobHistoryStore::new(
-            data_dir.join("jobs").join("history.jsonl"),
-        ));
-        let results = Arc::new(ResultStore::new(
-            data_dir.join("jobs").join("results.json"),
-        ));
-        let progress = Arc::new(ProgressTracker::new());
-        let job_manager = Arc::new(JobManager::new(
-            scheduler_registry.clone(),
-            job_history.clone(),
-            results,
-            progress,
-            event_bus.clone(),
-        ));
-        let job_api = Arc::new(JobApi::new(
-            job_manager.clone(),
-            scheduler_registry.clone(),
-            job_history.clone(),
-        ));
-
-        Self {
-            plugin_registry: Arc::new(tokio::sync::RwLock::new(PluginRegistry::new())),
-            event_bus,
-            python_service: Arc::new(tokio::sync::RwLock::new(None)),
-            dask_service: Arc::new(tokio::sync::RwLock::new(None)),
-            ray_service: Arc::new(tokio::sync::RwLock::new(None)),
-            mpi_service: Arc::new(tokio::sync::RwLock::new(None)),
-            p2p_service: Arc::new(tokio::sync::RwLock::new(None)),
-            scheduler_registry,
-            job_history,
-            job_manager,
-            job_api,
-            data_dir,
-        }
-    }
-}
-
-impl Default for AppState {
-    fn default() -> Self {
-        Self::new(PathBuf::from("./data"))
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    crate::logging::init();
+    cluster_runtime_core::logging::init();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -165,7 +60,6 @@ pub fn run() {
             commands::python_list_environments,
             commands::python_package_index,
             commands::python_set_package_index,
-            // Dask Scheduler Plugin
             commands::dask_ensure_packages,
             commands::dask_get_settings,
             commands::dask_update_settings,
@@ -192,7 +86,6 @@ pub fn run() {
             commands::dask_job_status,
             commands::dask_run_example,
             commands::dask_cancel_job,
-            // Ray Plugin
             commands::ray_ensure_packages,
             commands::ray_get_settings,
             commands::ray_update_settings,
@@ -219,7 +112,6 @@ pub fn run() {
             commands::ray_job_status,
             commands::ray_run_example,
             commands::ray_cancel_job,
-            // Unified Job API
             commands::job_submit,
             commands::job_cancel,
             commands::job_status,
@@ -231,16 +123,13 @@ pub fn run() {
             commands::scheduler_list,
             commands::scheduler_get_active,
             commands::scheduler_set_active,
-            // MPI Plugin
             commands::mpi_ensure_toolchain,
             commands::mpi_get_settings,
             commands::mpi_update_settings,
             commands::mpi_status,
-            // P2P
             commands::p2p_local_peer_id,
             commands::p2p_listen_addrs,
             commands::p2p_connect,
-            // Updates (check + notify)
             commands::check_for_updates,
             commands::get_app_version,
         ])

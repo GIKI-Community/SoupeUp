@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/cluster-runtime-core",
+  "crates/cluster-runtime-server",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Cluster Runtime Contributors"]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

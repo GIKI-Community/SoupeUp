@@ -1,0 +1,15 @@
+[package]
+name = "cluster-runtime-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Headless Cluster Runtime server (no GUI)"
+
+[[bin]]
+name = "cluster-runtime-server"
+path = "src/main.rs"
+
+[dependencies]
+cluster-runtime-core = { path = "../cluster-runtime-core" }
+log = "0.4"
+tokio = { version = "1.52.3", features = ["full", "signal", "macros", "rt-multi-thread"] }

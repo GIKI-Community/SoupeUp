@@ -19,5 +19,4 @@ pub mod types;
 pub mod worker;
 
 pub use services::RayService;
-pub use services::example_failure;
 pub use types::*;

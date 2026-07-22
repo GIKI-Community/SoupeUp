@@ -1,9 +1,9 @@
-use crate::core::{mock_activity, mock_system_info, mock_system_status, ActivityEntry, SystemInfo, SystemStatus};
-use crate::metrics::{mock_metrics, MetricsSnapshot};
-use crate::nodes::{mock_nodes};
-use crate::network::{ClusterSummary, PeerInfo};
-use crate::plugin_registry::PluginInfo;
-use crate::python_runtime::types::{
+use cluster_runtime_core::core::{mock_activity, mock_system_info, mock_system_status, ActivityEntry, SystemInfo, SystemStatus};
+use cluster_runtime_core::metrics::{mock_metrics, MetricsSnapshot};
+use cluster_runtime_core::nodes::{mock_nodes};
+use cluster_runtime_core::network::{ClusterSummary, PeerInfo};
+use cluster_runtime_core::plugin_registry::PluginInfo;
+use cluster_runtime_core::python_runtime::types::{
     EnvironmentInfo, ExecutionContext, ExecutionResult, PackageInfo, PythonRuntimeHealth,
 };
 
@@ -26,19 +26,19 @@ pub fn get_activity() -> Vec<ActivityEntry> {
 
 #[tauri::command]
 pub async fn get_nodes(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Vec<crate::nodes::Node>, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<Vec<cluster_runtime_core::nodes::Node>, String> {
     let mut nodes = Vec::new();
 
     if let Some(svc) = state.dask_service.read().await.as_ref() {
         if let Ok(snap) = svc.cluster_snapshot().await {
-            nodes.extend(crate::nodes::nodes_from_dask_snapshot(&snap));
+            nodes.extend(cluster_runtime_core::nodes::nodes_from_dask_snapshot(&snap));
         }
     }
 
     if let Some(svc) = state.ray_service.read().await.as_ref() {
         if let Ok(snap) = svc.cluster_snapshot().await {
-            nodes.extend(crate::nodes::nodes_from_ray_snapshot(&snap));
+            nodes.extend(cluster_runtime_core::nodes::nodes_from_ray_snapshot(&snap));
         }
     }
 
@@ -50,13 +50,13 @@ pub async fn get_nodes(
 }
 
 #[tauri::command]
-pub async fn get_jobs(state: tauri::State<'_, crate::AppState>) -> Result<Vec<crate::jobs::Job>, String> {
+pub async fn get_jobs(state: tauri::State<'_, cluster_runtime_core::AppState>) -> Result<Vec<cluster_runtime_core::jobs::Job>, String> {
     Ok(state.job_manager.list().await)
 }
 
 #[tauri::command]
 pub async fn get_cluster_summary(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<ClusterSummary, String> {
     let mut summary = ClusterSummary {
         total_nodes: 0,
@@ -70,7 +70,7 @@ pub async fn get_cluster_summary(
 
     if let Some(svc) = state.dask_service.read().await.as_ref() {
         if let Ok(snap) = svc.cluster_snapshot().await {
-            use crate::dask::ComponentStatus;
+            use cluster_runtime_core::dask::ComponentStatus;
             let scheduler_up = snap.scheduler.status == ComponentStatus::Running;
             summary.total_nodes += snap.workers.len().max(1);
             summary.online_nodes += if scheduler_up {
@@ -87,7 +87,7 @@ pub async fn get_cluster_summary(
 
     if let Some(svc) = state.ray_service.read().await.as_ref() {
         if let Ok(snap) = svc.cluster_snapshot().await {
-            use crate::ray::ComponentStatus;
+            use cluster_runtime_core::ray::ComponentStatus;
             let head_up = snap.head.status == ComponentStatus::Running;
             summary.total_nodes += snap.workers.len().max(1);
             summary.online_nodes += if head_up {
@@ -107,7 +107,7 @@ pub async fn get_cluster_summary(
 
 #[tauri::command]
 pub async fn get_cluster_peers(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<PeerInfo>, String> {
     if let Some(p2p) = state.p2p_service.read().await.clone() {
         return p2p.list_peers().await;
@@ -117,7 +117,7 @@ pub async fn get_cluster_peers(
 
 #[tauri::command]
 pub async fn get_plugins(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<PluginInfo>, String> {
     let registry = state.plugin_registry.read().await;
     Ok(registry.list_plugins())
@@ -125,7 +125,7 @@ pub async fn get_plugins(
 
 #[tauri::command]
 pub async fn plugin_set_enabled(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     id: String,
     enabled: bool,
 ) -> Result<PluginInfo, String> {
@@ -137,15 +137,15 @@ pub async fn plugin_set_enabled(
     };
 
     if !enabled {
-        crate::plugin_loader::enabled::set_enabled(
+        cluster_runtime_core::plugin_loader::enabled::set_enabled(
             &state.data_dir,
             &id,
             false,
             &manifest,
         )?;
-        crate::plugin_host::factories::stop_plugin(&id, &state).await?;
+        cluster_runtime_core::plugin_host::factories::stop_plugin(&id, &state).await?;
     } else {
-        crate::plugin_host::factories::enable_and_start(&state, &id).await?;
+        cluster_runtime_core::plugin_host::factories::enable_and_start(&state, &id).await?;
     }
 
     let reg = state.plugin_registry.read().await;
@@ -156,30 +156,30 @@ pub async fn plugin_set_enabled(
 
 #[tauri::command]
 pub async fn plugin_install(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     source_path: String,
     force: Option<bool>,
 ) -> Result<PluginInfo, String> {
     let app_version = env!("CARGO_PKG_VERSION");
     let force = force.unwrap_or(false);
-    let (_dest, manifest) = crate::plugin_loader::install::install_from_path(
+    let (_dest, manifest) = cluster_runtime_core::plugin_loader::install::install_from_path(
         &state.data_dir,
         std::path::Path::new(&source_path),
         app_version,
         force,
     )?;
 
-    let enabled = crate::plugin_loader::enabled::is_enabled(
-        &crate::plugin_loader::enabled::load(&state.data_dir),
+    let enabled = cluster_runtime_core::plugin_loader::enabled::is_enabled(
+        &cluster_runtime_core::plugin_loader::enabled::load(&state.data_dir),
         &manifest,
     );
     let compatible = manifest.is_compatible_with_app(app_version);
     let status = if !compatible {
-        crate::plugin_registry::PluginStatus::Incompatible
+        cluster_runtime_core::plugin_registry::PluginStatus::Incompatible
     } else if !enabled {
-        crate::plugin_registry::PluginStatus::Disabled
+        cluster_runtime_core::plugin_registry::PluginStatus::Disabled
     } else {
-        crate::plugin_registry::PluginStatus::Discovered
+        cluster_runtime_core::plugin_registry::PluginStatus::Discovered
     };
 
     {
@@ -192,11 +192,11 @@ pub async fn plugin_install(
 
     if enabled && compatible {
         if let Err(e) =
-            crate::plugin_host::factories::enable_and_start(&state, &manifest.id).await
+            cluster_runtime_core::plugin_host::factories::enable_and_start(&state, &manifest.id).await
         {
             log::warn!("Installed {} but start failed: {e}", manifest.id);
             let mut reg = state.plugin_registry.write().await;
-            reg.update_plugin_status(&manifest.id, crate::plugin_registry::PluginStatus::Error);
+            reg.update_plugin_status(&manifest.id, cluster_runtime_core::plugin_registry::PluginStatus::Error);
         }
     }
 
@@ -208,7 +208,7 @@ pub async fn plugin_install(
 
 #[tauri::command]
 pub async fn plugin_uninstall(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     id: String,
 ) -> Result<(), String> {
     let manifest = {
@@ -226,12 +226,12 @@ pub async fn plugin_uninstall(
     }
 
     // Stop if running / enabled.
-    let _ = crate::plugin_host::factories::stop_plugin(&id, &state).await;
-    crate::plugin_loader::install::uninstall(&state.data_dir, &id, &manifest)?;
+    let _ = cluster_runtime_core::plugin_host::factories::stop_plugin(&id, &state).await;
+    cluster_runtime_core::plugin_loader::install::uninstall(&state.data_dir, &id, &manifest)?;
 
-    let mut cfg = crate::plugin_loader::enabled::load(&state.data_dir);
+    let mut cfg = cluster_runtime_core::plugin_loader::enabled::load(&state.data_dir);
     cfg.enabled.remove(&id);
-    let _ = crate::plugin_loader::enabled::save(&state.data_dir, &cfg);
+    let _ = cluster_runtime_core::plugin_loader::enabled::save(&state.data_dir, &cfg);
 
     let mut reg = state.plugin_registry.write().await;
     reg.remove(&id);
@@ -240,16 +240,16 @@ pub async fn plugin_uninstall(
 
 #[tauri::command]
 pub async fn plugin_check_update(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     id: String,
-) -> Result<crate::plugin_host::update_check::PluginUpdateCheck, String> {
+) -> Result<cluster_runtime_core::plugin_host::update_check::PluginUpdateCheck, String> {
     let manifest = {
         let reg = state.plugin_registry.read().await;
         reg.get_manifest(&id)
             .cloned()
             .ok_or_else(|| format!("Plugin '{id}' not found"))?
     };
-    crate::plugin_host::update_check::check_plugin_update(&manifest).await
+    cluster_runtime_core::plugin_host::update_check::check_plugin_update(&manifest).await
 }
 
 #[tauri::command]
@@ -258,8 +258,8 @@ pub fn get_metrics() -> MetricsSnapshot {
 }
 
 #[tauri::command]
-pub fn get_logs() -> Vec<crate::logging::LogEntry> {
-    crate::logging::recent_logs()
+pub fn get_logs() -> Vec<cluster_runtime_core::logging::LogEntry> {
+    cluster_runtime_core::logging::recent_logs()
 }
 
 // ─── Python Runtime Commands ──────────────────────────────────────────────────
@@ -286,7 +286,7 @@ macro_rules! python_service {
 /// Execute a Python code string and return a structured result.
 #[tauri::command]
 pub async fn python_execute_code(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     code: String,
     context: Option<ExecutionContext>,
 ) -> Result<ExecutionResult, String> {
@@ -299,7 +299,7 @@ pub async fn python_execute_code(
 /// Execute a Python script at the given filesystem path.
 #[tauri::command]
 pub async fn python_execute_script(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     script_path: String,
     context: Option<ExecutionContext>,
 ) -> Result<ExecutionResult, String> {
@@ -312,7 +312,7 @@ pub async fn python_execute_script(
 /// Run `python -m <module>` inside the active managed environment.
 #[tauri::command]
 pub async fn python_execute_module(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     module: String,
     context: Option<ExecutionContext>,
 ) -> Result<ExecutionResult, String> {
@@ -325,7 +325,7 @@ pub async fn python_execute_module(
 /// Install a pip package into the active environment.
 #[tauri::command]
 pub async fn python_install_package(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     package: String,
     version: Option<String>,
 ) -> Result<PackageInfo, String> {
@@ -338,7 +338,7 @@ pub async fn python_install_package(
 /// Uninstall a pip package from the active environment.
 #[tauri::command]
 pub async fn python_uninstall_package(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     package: String,
 ) -> Result<(), String> {
     let svc = python_service!(state);
@@ -350,7 +350,7 @@ pub async fn python_uninstall_package(
 /// List all packages installed in the active environment.
 #[tauri::command]
 pub async fn python_list_packages(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<PackageInfo>, String> {
     let svc = python_service!(state);
     svc.list_packages().await.map_err(|e| e.to_string())
@@ -359,7 +359,7 @@ pub async fn python_list_packages(
 /// Create a new isolated virtual environment.
 #[tauri::command]
 pub async fn python_create_environment(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     name: String,
 ) -> Result<EnvironmentInfo, String> {
     let svc = python_service!(state);
@@ -371,7 +371,7 @@ pub async fn python_create_environment(
 /// Delete a managed virtual environment.
 #[tauri::command]
 pub async fn python_delete_environment(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     name: String,
 ) -> Result<(), String> {
     let svc = python_service!(state);
@@ -383,7 +383,7 @@ pub async fn python_delete_environment(
 /// Switch the active virtual environment.
 #[tauri::command]
 pub async fn python_activate_environment(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     name: String,
 ) -> Result<(), String> {
     let svc = python_service!(state);
@@ -395,7 +395,7 @@ pub async fn python_activate_environment(
 /// List all managed virtual environments.
 #[tauri::command]
 pub async fn python_list_environments(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<EnvironmentInfo>, String> {
     let svc = python_service!(state);
     svc.list_environments().await.map_err(|e| e.to_string())
@@ -404,13 +404,13 @@ pub async fn python_list_environments(
 /// Get a health report for the Python Runtime.
 #[tauri::command]
 pub async fn python_runtime_health(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<PythonRuntimeHealth, String> {
     let lock = state.python_service.read().await;
     match lock.as_ref() {
         Some(svc) => svc.runtime_health().await.map_err(|e| e.to_string()),
         None => Ok(PythonRuntimeHealth {
-            status: crate::python_runtime::types::RuntimeStatus::Initializing,
+            status: cluster_runtime_core::python_runtime::types::RuntimeStatus::Initializing,
             python_version: None,
             active_environment: None,
             environment_path: None,
@@ -423,7 +423,7 @@ pub async fn python_runtime_health(
 /// Return the Python version string used by the active interpreter.
 #[tauri::command]
 pub async fn python_version(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<String, String> {
     let svc = python_service!(state);
     svc.python_version().await.map_err(|e| e.to_string())
@@ -432,7 +432,7 @@ pub async fn python_version(
 /// Return the configured pip package index URL.
 #[tauri::command]
 pub async fn python_package_index(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<String, String> {
     let svc = python_service!(state);
     Ok(svc.package_index().await)
@@ -441,7 +441,7 @@ pub async fn python_package_index(
 /// Update the package index URL used for pip installs.
 #[tauri::command]
 pub async fn python_set_package_index(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     index_url: String,
 ) -> Result<(), String> {
     let svc = python_service!(state);
@@ -468,7 +468,7 @@ macro_rules! dask_service {
 
 #[tauri::command]
 pub async fn dask_ensure_packages(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<String>, String> {
     let svc = dask_service!(state);
     svc.ensure_packages().await.map_err(|e| e.to_string())
@@ -476,17 +476,17 @@ pub async fn dask_ensure_packages(
 
 #[tauri::command]
 pub async fn dask_get_settings(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::settings::DaskSettings, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::settings::DaskSettings, String> {
     let svc = dask_service!(state);
     Ok(svc.get_settings().await)
 }
 
 #[tauri::command]
 pub async fn dask_update_settings(
-    state: tauri::State<'_, crate::AppState>,
-    settings: crate::dask::settings::DaskSettings,
-) -> Result<crate::dask::settings::DaskSettings, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+    settings: cluster_runtime_core::dask::settings::DaskSettings,
+) -> Result<cluster_runtime_core::dask::settings::DaskSettings, String> {
     let svc = dask_service!(state);
     svc.update_settings(settings)
         .await
@@ -495,41 +495,41 @@ pub async fn dask_update_settings(
 
 #[tauri::command]
 pub async fn dask_start_scheduler(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::SchedulerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::SchedulerInfo, String> {
     let svc = dask_service!(state);
     svc.start_scheduler().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_stop_scheduler(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::SchedulerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::SchedulerInfo, String> {
     let svc = dask_service!(state);
     svc.stop_scheduler().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_restart_scheduler(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::SchedulerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::SchedulerInfo, String> {
     let svc = dask_service!(state);
     svc.restart_scheduler().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_scheduler_status(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::SchedulerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::SchedulerInfo, String> {
     let svc = dask_service!(state);
     Ok(svc.scheduler_status().await)
 }
 
 #[tauri::command]
 pub async fn dask_start_worker(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     scheduler_address: Option<String>,
-) -> Result<crate::dask::WorkerInfo, String> {
+) -> Result<cluster_runtime_core::dask::WorkerInfo, String> {
     let svc = dask_service!(state);
     svc.start_worker(scheduler_address)
         .await
@@ -538,31 +538,31 @@ pub async fn dask_start_worker(
 
 #[tauri::command]
 pub async fn dask_stop_worker(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::WorkerInfo, String> {
     let svc = dask_service!(state);
     svc.stop_worker().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_restart_worker(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::WorkerInfo, String> {
     let svc = dask_service!(state);
     svc.restart_worker().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_worker_status(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::WorkerInfo, String> {
     let svc = dask_service!(state);
     Ok(svc.worker_status().await)
 }
 
 #[tauri::command]
 pub async fn dask_connect_client(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     address: Option<String>,
 ) -> Result<String, String> {
     let svc = dask_service!(state);
@@ -571,7 +571,7 @@ pub async fn dask_connect_client(
 
 #[tauri::command]
 pub async fn dask_disconnect_client(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<(), String> {
     let svc = dask_service!(state);
     svc.disconnect_client().await.map_err(|e| e.to_string())
@@ -579,15 +579,15 @@ pub async fn dask_disconnect_client(
 
 #[tauri::command]
 pub async fn dask_cluster_snapshot(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::ClusterSnapshot, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::ClusterSnapshot, String> {
     let svc = dask_service!(state);
     svc.cluster_snapshot().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_cluster_info(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<serde_json::Value, String> {
     let svc = dask_service!(state);
     svc.cluster_info().await.map_err(|e| e.to_string())
@@ -595,26 +595,26 @@ pub async fn dask_cluster_info(
 
 #[tauri::command]
 pub async fn dask_dashboard(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::dashboard::DashboardView, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::dashboard::DashboardView, String> {
     let svc = dask_service!(state);
     Ok(svc.dashboard().await)
 }
 
 #[tauri::command]
 pub async fn dask_metrics(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::dask::monitoring::DaskMetrics, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::dask::monitoring::DaskMetrics, String> {
     let svc = dask_service!(state);
     svc.metrics().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_submit_python_function(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     function_body: String,
     args: serde_json::Value,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.submit_python_function(function_body, args)
         .await
@@ -623,10 +623,10 @@ pub async fn dask_submit_python_function(
 
 #[tauri::command]
 pub async fn dask_map(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     function_body: String,
     items: serde_json::Value,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.map(function_body, items)
         .await
@@ -635,19 +635,19 @@ pub async fn dask_map(
 
 #[tauri::command]
 pub async fn dask_run_example(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     example_id: String,
-) -> Result<crate::dask::ExampleJobResult, String> {
+) -> Result<cluster_runtime_core::dask::ExampleJobResult, String> {
     let _ = state
         .scheduler_registry
-        .set_active(crate::scheduler::selection::DASK_PLUGIN_ID)
+        .set_active(cluster_runtime_core::scheduler::selection::DASK_PLUGIN_ID)
         .await;
 
-    let title = crate::jobs::examples::get(&example_id)
+    let title = cluster_runtime_core::jobs::examples::get(&example_id)
         .map(|spec| spec.title.to_string())
         .unwrap_or_else(|| example_id.clone());
 
-    let spec = crate::jobs::JobSpec::example(&title, &example_id);
+    let spec = cluster_runtime_core::jobs::JobSpec::example(&title, &example_id);
     let ack = state.job_manager.submit(spec, "dask-example").await?;
     let result = state.job_manager.result(&ack.job_id).await?;
     Ok(example_result_from_job(&example_id, &title, &result))
@@ -655,7 +655,7 @@ pub async fn dask_run_example(
 
 #[tauri::command]
 pub async fn dask_cancel_job(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
 ) -> Result<(), String> {
     let svc = dask_service!(state);
@@ -664,43 +664,43 @@ pub async fn dask_cancel_job(
 
 #[tauri::command]
 pub async fn dask_submit_script(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     script: String,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.submit_script(script).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_submit_module(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     module: String,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.submit_module(module).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_scatter(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     data: serde_json::Value,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.scatter(data).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_gather(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     keys: serde_json::Value,
-) -> Result<crate::dask::JobResult, String> {
+) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
     svc.gather(keys).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn dask_job_status(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
 ) -> Result<serde_json::Value, String> {
     let svc = dask_service!(state);
@@ -726,7 +726,7 @@ macro_rules! ray_service {
 
 #[tauri::command]
 pub async fn ray_ensure_packages(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<String>, String> {
     let svc = ray_service!(state);
     svc.ensure_packages().await.map_err(|e| e.to_string())
@@ -734,17 +734,17 @@ pub async fn ray_ensure_packages(
 
 #[tauri::command]
 pub async fn ray_get_settings(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::settings::RaySettings, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::settings::RaySettings, String> {
     let svc = ray_service!(state);
     Ok(svc.get_settings().await)
 }
 
 #[tauri::command]
 pub async fn ray_update_settings(
-    state: tauri::State<'_, crate::AppState>,
-    settings: crate::ray::settings::RaySettings,
-) -> Result<crate::ray::settings::RaySettings, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+    settings: cluster_runtime_core::ray::settings::RaySettings,
+) -> Result<cluster_runtime_core::ray::settings::RaySettings, String> {
     let svc = ray_service!(state);
     svc.update_settings(settings)
         .await
@@ -753,41 +753,41 @@ pub async fn ray_update_settings(
 
 #[tauri::command]
 pub async fn ray_start_head(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::HeadInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::HeadInfo, String> {
     let svc = ray_service!(state);
     svc.start_head().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_stop_head(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::HeadInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::HeadInfo, String> {
     let svc = ray_service!(state);
     svc.stop_head().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_restart_head(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::HeadInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::HeadInfo, String> {
     let svc = ray_service!(state);
     svc.restart_head().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_head_status(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::HeadInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::HeadInfo, String> {
     let svc = ray_service!(state);
     Ok(svc.head_status().await)
 }
 
 #[tauri::command]
 pub async fn ray_start_worker(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     head_address: Option<String>,
-) -> Result<crate::ray::WorkerInfo, String> {
+) -> Result<cluster_runtime_core::ray::WorkerInfo, String> {
     let svc = ray_service!(state);
     svc.start_worker(head_address)
         .await
@@ -796,31 +796,31 @@ pub async fn ray_start_worker(
 
 #[tauri::command]
 pub async fn ray_stop_worker(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::WorkerInfo, String> {
     let svc = ray_service!(state);
     svc.stop_worker().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_restart_worker(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::WorkerInfo, String> {
     let svc = ray_service!(state);
     svc.restart_worker().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_worker_status(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::WorkerInfo, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::WorkerInfo, String> {
     let svc = ray_service!(state);
     Ok(svc.worker_status().await)
 }
 
 #[tauri::command]
 pub async fn ray_connect_client(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     address: Option<String>,
 ) -> Result<String, String> {
     let svc = ray_service!(state);
@@ -829,7 +829,7 @@ pub async fn ray_connect_client(
 
 #[tauri::command]
 pub async fn ray_disconnect_client(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<(), String> {
     let svc = ray_service!(state);
     svc.disconnect_client().await.map_err(|e| e.to_string())
@@ -837,15 +837,15 @@ pub async fn ray_disconnect_client(
 
 #[tauri::command]
 pub async fn ray_cluster_snapshot(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::ClusterSnapshot, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::ClusterSnapshot, String> {
     let svc = ray_service!(state);
     svc.cluster_snapshot().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_cluster_info(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<serde_json::Value, String> {
     let svc = ray_service!(state);
     svc.cluster_info().await.map_err(|e| e.to_string())
@@ -853,26 +853,26 @@ pub async fn ray_cluster_info(
 
 #[tauri::command]
 pub async fn ray_dashboard(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::dashboard::DashboardView, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::dashboard::DashboardView, String> {
     let svc = ray_service!(state);
     Ok(svc.dashboard().await)
 }
 
 #[tauri::command]
 pub async fn ray_metrics(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::ray::monitoring::RayMetrics, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::ray::monitoring::RayMetrics, String> {
     let svc = ray_service!(state);
     svc.metrics().await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_submit_python_function(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     function_body: String,
     args: serde_json::Value,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.submit_python_function(function_body, args)
         .await
@@ -881,10 +881,10 @@ pub async fn ray_submit_python_function(
 
 #[tauri::command]
 pub async fn ray_map(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     function_body: String,
     items: serde_json::Value,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.map(function_body, items)
         .await
@@ -893,19 +893,19 @@ pub async fn ray_map(
 
 #[tauri::command]
 pub async fn ray_run_example(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     example_id: String,
-) -> Result<crate::ray::ExampleJobResult, String> {
+) -> Result<cluster_runtime_core::ray::ExampleJobResult, String> {
     let _ = state
         .scheduler_registry
-        .set_active(crate::scheduler::selection::RAY_PLUGIN_ID)
+        .set_active(cluster_runtime_core::scheduler::selection::RAY_PLUGIN_ID)
         .await;
 
-    let title = crate::jobs::examples::get(&example_id)
+    let title = cluster_runtime_core::jobs::examples::get(&example_id)
         .map(|spec| spec.title.to_string())
         .unwrap_or_else(|| example_id.clone());
 
-    let spec = crate::jobs::JobSpec::example(&title, &example_id);
+    let spec = cluster_runtime_core::jobs::JobSpec::example(&title, &example_id);
     let ack = state.job_manager.submit(spec, "ray-example").await?;
     let result = state.job_manager.result(&ack.job_id).await?;
     Ok(example_result_from_job_ray(&example_id, &title, &result))
@@ -913,7 +913,7 @@ pub async fn ray_run_example(
 
 #[tauri::command]
 pub async fn ray_cancel_job(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
 ) -> Result<(), String> {
     let svc = ray_service!(state);
@@ -922,43 +922,43 @@ pub async fn ray_cancel_job(
 
 #[tauri::command]
 pub async fn ray_submit_script(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     script: String,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.submit_script(script).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_submit_module(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     module: String,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.submit_module(module).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_scatter(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     data: serde_json::Value,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.scatter(data).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_gather(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     keys: serde_json::Value,
-) -> Result<crate::ray::JobResult, String> {
+) -> Result<cluster_runtime_core::ray::JobResult, String> {
     let svc = ray_service!(state);
     svc.gather(keys).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn ray_job_status(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
 ) -> Result<serde_json::Value, String> {
     let svc = ray_service!(state);
@@ -970,12 +970,12 @@ pub async fn ray_job_status(
 fn example_result_from_job(
     example_id: &str,
     title: &str,
-    result: &crate::jobs::JobResult,
-) -> crate::dask::ExampleJobResult {
-    crate::dask::ExampleJobResult {
+    result: &cluster_runtime_core::jobs::JobResult,
+) -> cluster_runtime_core::dask::ExampleJobResult {
+    cluster_runtime_core::dask::ExampleJobResult {
         example_id: example_id.to_string(),
         title: title.to_string(),
-        success: result.status == crate::jobs::JobStatus::Completed,
+        success: result.status == cluster_runtime_core::jobs::JobStatus::Completed,
         execution_time_ms: result.metrics.execution_time_ms,
         workers_used: result.metrics.workers_used,
         cpu_utilization: result.metrics.cpu_utilization,
@@ -989,12 +989,12 @@ fn example_result_from_job(
 fn example_result_from_job_ray(
     example_id: &str,
     title: &str,
-    result: &crate::jobs::JobResult,
-) -> crate::ray::ExampleJobResult {
-    crate::ray::ExampleJobResult {
+    result: &cluster_runtime_core::jobs::JobResult,
+) -> cluster_runtime_core::ray::ExampleJobResult {
+    cluster_runtime_core::ray::ExampleJobResult {
         example_id: example_id.to_string(),
         title: title.to_string(),
-        success: result.status == crate::jobs::JobStatus::Completed,
+        success: result.status == cluster_runtime_core::jobs::JobStatus::Completed,
         execution_time_ms: result.metrics.execution_time_ms,
         workers_used: result.metrics.workers_used,
         cpu_utilization: result.metrics.cpu_utilization,
@@ -1007,10 +1007,10 @@ fn example_result_from_job_ray(
 
 #[tauri::command]
 pub async fn job_submit(
-    state: tauri::State<'_, crate::AppState>,
-    spec: crate::jobs::JobSpec,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+    spec: cluster_runtime_core::jobs::JobSpec,
     owner: Option<String>,
-) -> Result<crate::jobs::SubmitAck, String> {
+) -> Result<cluster_runtime_core::jobs::SubmitAck, String> {
     state
         .job_api
         .submit(spec, owner.as_deref().unwrap_or("user"))
@@ -1019,7 +1019,7 @@ pub async fn job_submit(
 
 #[tauri::command]
 pub async fn job_cancel(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
 ) -> Result<(), String> {
     state.job_api.cancel(&job_id).await
@@ -1027,68 +1027,68 @@ pub async fn job_cancel(
 
 #[tauri::command]
 pub async fn job_status(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
-) -> Result<crate::jobs::JobStatus, String> {
+) -> Result<cluster_runtime_core::jobs::JobStatus, String> {
     state.job_api.status(&job_id).await
 }
 
 #[tauri::command]
 pub async fn job_progress(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
-) -> Result<crate::jobs::JobProgress, String> {
+) -> Result<cluster_runtime_core::jobs::JobProgress, String> {
     state.job_api.progress(&job_id).await
 }
 
 #[tauri::command]
 pub async fn job_result(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
-) -> Result<crate::jobs::JobResult, String> {
+) -> Result<cluster_runtime_core::jobs::JobResult, String> {
     state.job_api.result(&job_id).await
 }
 
 #[tauri::command]
 pub async fn job_list(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Vec<crate::jobs::Job>, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<Vec<cluster_runtime_core::jobs::Job>, String> {
     Ok(state.job_api.list().await)
 }
 
 #[tauri::command]
 pub async fn job_get(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
-) -> Result<crate::jobs::JobDetail, String> {
+) -> Result<cluster_runtime_core::jobs::JobDetail, String> {
     state.job_api.get(&job_id).await
 }
 
 #[tauri::command]
 pub async fn job_retry(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     job_id: String,
-) -> Result<crate::jobs::SubmitAck, String> {
+) -> Result<cluster_runtime_core::jobs::SubmitAck, String> {
     state.job_api.retry(&job_id).await
 }
 
 #[tauri::command]
 pub async fn scheduler_list(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<Vec<crate::jobs::SchedulerListEntry>, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<Vec<cluster_runtime_core::jobs::SchedulerListEntry>, String> {
     Ok(state.job_api.scheduler_list().await)
 }
 
 #[tauri::command]
 pub async fn scheduler_get_active(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<String, String> {
     Ok(state.job_api.scheduler_get_active().await)
 }
 
 #[tauri::command]
 pub async fn scheduler_set_active(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     plugin_id: String,
 ) -> Result<(), String> {
     state.job_api.scheduler_set_active(&plugin_id).await
@@ -1098,8 +1098,8 @@ pub async fn scheduler_set_active(
 
 #[tauri::command]
 pub async fn mpi_ensure_toolchain(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::mpi::MpiToolchain, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::mpi::MpiToolchain, String> {
     let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
         log::warn!("mpi_ensure_toolchain: service slot empty (plugins still loading?)");
         "MPI service not initialized yet — wait for plugins to finish loading".to_string()
@@ -1113,8 +1113,8 @@ pub async fn mpi_ensure_toolchain(
 
 #[tauri::command]
 pub async fn mpi_get_settings(
-    state: tauri::State<'_, crate::AppState>,
-) -> Result<crate::mpi::settings::MpiSettings, String> {
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<cluster_runtime_core::mpi::settings::MpiSettings, String> {
     let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
         "MPI service not initialized yet — wait for plugins to finish loading".to_string()
     })?;
@@ -1123,8 +1123,8 @@ pub async fn mpi_get_settings(
 
 #[tauri::command]
 pub async fn mpi_update_settings(
-    state: tauri::State<'_, crate::AppState>,
-    settings: crate::mpi::settings::MpiSettings,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+    settings: cluster_runtime_core::mpi::settings::MpiSettings,
 ) -> Result<(), String> {
     let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
         "MPI service not initialized yet — wait for plugins to finish loading".to_string()
@@ -1138,7 +1138,7 @@ pub async fn mpi_update_settings(
 
 #[tauri::command]
 pub async fn mpi_status(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<serde_json::Value, String> {
     let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
         log::warn!("mpi_status: service slot empty (plugins still loading?)");
@@ -1155,7 +1155,7 @@ pub async fn mpi_status(
 
 #[tauri::command]
 pub async fn p2p_local_peer_id(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Option<String>, String> {
     Ok(state
         .p2p_service
@@ -1167,7 +1167,7 @@ pub async fn p2p_local_peer_id(
 
 #[tauri::command]
 pub async fn p2p_listen_addrs(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
 ) -> Result<Vec<String>, String> {
     if let Some(p2p) = state.p2p_service.read().await.clone() {
         return p2p.listen_addrs().await;
@@ -1177,7 +1177,7 @@ pub async fn p2p_listen_addrs(
 
 #[tauri::command]
 pub async fn p2p_connect(
-    state: tauri::State<'_, crate::AppState>,
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
     multiaddr: String,
 ) -> Result<(), String> {
     let p2p = state
@@ -1192,8 +1192,8 @@ pub async fn p2p_connect(
 // ─── Updates (check + notify) ─────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn check_for_updates() -> Result<crate::updates::UpdateCheckResult, String> {
-    crate::updates::check_for_updates().await
+pub async fn check_for_updates() -> Result<cluster_runtime_core::updates::UpdateCheckResult, String> {
+    cluster_runtime_core::updates::check_for_updates().await
 }
 
 #[tauri::command]
