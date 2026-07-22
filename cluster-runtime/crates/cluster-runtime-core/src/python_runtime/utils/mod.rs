@@ -24,24 +24,44 @@ pub fn venv_pip_path(venv_path: &Path) -> PathBuf {
     }
 }
 
+/// Resolve the application data directory hint (set by GUI/server bootstrap).
+pub fn data_dir_hint() -> Option<PathBuf> {
+    std::env::var("CLUSTER_RUNTIME_DATA_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(PathBuf::from)
+}
+
 /// Base directory for all managed Python environments.
-/// Lives next to the executable so the installation is fully self-contained.
-///
-/// Dev mode:  `src-tauri/target/debug/runtime/python/environments/`
-/// Production: `<install_dir>/runtime/python/environments/`
+/// Prefer `{data_dir}/python/environments/`; fall back next to the executable.
 pub fn environments_base_dir() -> PathBuf {
+    if let Some(data) = data_dir_hint() {
+        return data.join("python").join("environments");
+    }
     exe_dir().join("runtime").join("python").join("environments")
 }
 
-/// Directory where the bundled Python distribution is expected.
+/// Directory where a downloaded/staged Python distribution is expected.
 ///
 /// Search order:
 /// 1. `$CLUSTER_RUNTIME_PYTHON_DIR` if set
-/// 2. `<exe_dir>/python/` (production / next to binary)
-/// 3. Walk parents looking for `resources/python` or `src-tauri/resources/python`
+/// 2. `{data_dir}/python/` (per-machine download via setup script)
+/// 3. `<exe_dir>/python/` (optional colocated install)
+/// 4. Walk parents looking for `resources/python` or `src-tauri/resources/python`
 pub fn bundled_python_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("CLUSTER_RUNTIME_PYTHON_DIR") {
         let p = PathBuf::from(dir);
+        if p.exists() {
+            return Some(p);
+        }
+        log::warn!(
+            "CLUSTER_RUNTIME_PYTHON_DIR set but missing: {}",
+            p.display()
+        );
+    }
+
+    if let Some(data) = data_dir_hint() {
+        let p = data.join("python");
         if p.exists() {
             return Some(p);
         }

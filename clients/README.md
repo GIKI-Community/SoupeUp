@@ -60,9 +60,21 @@ desktop still uses Tauri’s app data dir).
 Headless run (from `cluster-runtime/`):
 
 ```bash
-pnpm server:dev      # cargo run --bin cluster-runtime-server
-pnpm server:build    # release binary under target/release/cluster-runtime-server
+pnpm server:dev      # cargo run -p cluster-runtime-server (REPL)
+pnpm server:build    # target/release/cluster-runtime-server
+
+# Per-machine Python (not embedded in the binary):
+./scripts/Setup-PythonRuntime.sh --dest ./data/python   # Linux
+# ./scripts/Setup-PythonRuntime.ps1                     # Windows
+
+./target/release/cluster-runtime-server \
+  --data-dir ./data \
+  --api-addr 0.0.0.0:8129 \
+  --public-url http://HOST:8129 \
+  --python-dir ./data/python
 ```
+
+REPL commands include `status`, `dask start|stop`, `ray start|stop`, `scheduler set …`, `peer connect …`, `token`. Use `--no-repl` for daemon mode.
 
 ### Endpoint reference
 

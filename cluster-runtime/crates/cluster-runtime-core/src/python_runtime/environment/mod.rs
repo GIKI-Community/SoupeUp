@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use crate::python_runtime::interpreter::PythonInterpreter;
-use crate::python_runtime::types::{EnvironmentInfo, PythonError, PythonResult};
+use crate::python_runtime::types::{EnvironmentInfo, ExecutionResult, PythonError, PythonResult};
 use crate::python_runtime::utils::{
     environments_base_dir, parse_python_version, run_command_captured, venv_python_path,
 };
@@ -25,8 +25,12 @@ pub struct EnvironmentManager {
 
 impl EnvironmentManager {
     pub fn new(interpreter: PythonInterpreter) -> Self {
+        Self::with_base_dir(interpreter, environments_base_dir())
+    }
+
+    pub fn with_base_dir(interpreter: PythonInterpreter, base_dir: PathBuf) -> Self {
         Self {
-            base_dir: environments_base_dir(),
+            base_dir,
             interpreter,
             active_env: Arc::new(RwLock::new("default".to_string())),
         }
@@ -106,9 +110,18 @@ impl EnvironmentManager {
         if !result.success {
             // Clean up a partially-created directory
             tokio::fs::remove_dir_all(&env_path).await.ok();
+            let detail = format_venv_failure(&result);
+            log::error!(
+                "venv create failed for '{}' with {}: {}",
+                name,
+                self.interpreter.path.display(),
+                detail
+            );
             return Err(PythonError::EnvironmentError(format!(
-                "Failed to create venv '{}': {}",
-                name, result.stderr
+                "Failed to create venv '{}': {}. \
+                 On Ubuntu install `python3-venv python3-pip`, or run \
+                 `scripts/Setup-PythonRuntime.sh` to download a standalone Python.",
+                name, detail
             )));
         }
 
@@ -291,4 +304,23 @@ impl EnvironmentManager {
         }
         Ok(())
     }
+}
+
+fn format_venv_failure(result: &ExecutionResult) -> String {
+    let mut parts = Vec::new();
+    parts.push(format!("exit={}", result.exit_code));
+    let stdout = result.stdout.trim();
+    let stderr = result.stderr.trim();
+    if !stderr.is_empty() {
+        parts.push(format!("stderr={stderr}"));
+    }
+    if !stdout.is_empty() {
+        parts.push(format!("stdout={stdout}"));
+    }
+    if stderr.is_empty() && stdout.is_empty() {
+        parts.push(
+            "no output (often missing ensurepip/python3-venv on Debian/Ubuntu)".into(),
+        );
+    }
+    parts.join("; ")
 }

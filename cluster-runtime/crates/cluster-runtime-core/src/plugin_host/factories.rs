@@ -111,7 +111,11 @@ async fn start_python(ctx: &PluginStartContext<'_>) -> Result<(), String> {
         interpreter.is_bundled
     );
 
-    let svc = PythonExecutionService::new(interpreter, None);
+    let svc = PythonExecutionService::with_data_dir(
+        interpreter,
+        None,
+        Some(ctx.state.data_dir.clone()),
+    );
     svc.initialize().await.map_err(|e| {
         log::error!("plugins: Python initialize failed: {e}");
         e.to_string()

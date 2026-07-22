@@ -68,6 +68,12 @@ fn platform_app_data_dir() -> Option<PathBuf> {
 /// Must be called from within a Tokio runtime (e.g. `tokio::main` or
 /// `tauri::async_runtime::block_on`).
 pub async fn start(state: &AppState) {
+    // So python discovery / environments resolve against the same data dir.
+    std::env::set_var(
+        "CLUSTER_RUNTIME_DATA_DIR",
+        state.data_dir.as_os_str(),
+    );
+
     state.job_history.load().await;
     state.scheduler_registry.load_active().await;
     state.job_manager.load_persisted().await;

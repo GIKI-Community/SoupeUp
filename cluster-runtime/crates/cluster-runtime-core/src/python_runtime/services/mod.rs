@@ -39,8 +39,23 @@ impl PythonExecutionService {
     // ─── Constructor ──────────────────────────────────────────────────────────
 
     pub fn new(interpreter: PythonInterpreter, package_index: Option<String>) -> Self {
+        Self::with_data_dir(interpreter, package_index, None)
+    }
+
+    /// Prefer environments under `{data_dir}/python/environments`.
+    pub fn with_data_dir(
+        interpreter: PythonInterpreter,
+        package_index: Option<String>,
+        data_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        let base = data_dir
+            .map(|d| d.join("python").join("environments"))
+            .unwrap_or_else(crate::python_runtime::utils::environments_base_dir);
         Self {
-            env_manager: Arc::new(EnvironmentManager::new(interpreter.clone())),
+            env_manager: Arc::new(EnvironmentManager::with_base_dir(
+                interpreter.clone(),
+                base,
+            )),
             pip_manager: Arc::new(RwLock::new(PipManager::new(package_index))),
             execution_engine: ExecutionEngine::new(),
             background: BackgroundProcessManager::new(),
