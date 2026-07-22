@@ -156,7 +156,8 @@ export type PluginStatus =
   | "initializing"
   | "running"
   | "error"
-  | "disabled";
+  | "disabled"
+  | "incompatible";
 
 export interface Plugin {
   id: string;
@@ -167,6 +168,24 @@ export interface Plugin {
   description: string;
   capabilities?: string[];
   pluginType?: string;
+  enabled?: boolean;
+  mandatory?: boolean;
+  appCompat?: string;
+  isDefault?: boolean;
+}
+
+export type PluginUpdateRecommendation = "none" | "pluginUpdate" | "appUpdate";
+
+export interface PluginUpdateCheck {
+  pluginId: string;
+  installedVersion: string;
+  availableVersion?: string | null;
+  updateAvailable: boolean;
+  recommendation: PluginUpdateRecommendation;
+  message: string;
+  releaseUrl?: string | null;
+  appCompat: string;
+  appUpdate?: UpdateCheckResult | null;
 }
 
 // ─── Python Runtime ───────────────────────────────────────────────────────────

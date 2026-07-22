@@ -30,7 +30,12 @@ export function LogsPage() {
   const [moduleFilter, setModuleFilter] = useState<string>("all");
 
   useEffect(() => {
-    void LogsApi.list().then(setLogs);
+    const refresh = () => {
+      void LogsApi.list().then(setLogs);
+    };
+    refresh();
+    const id = window.setInterval(refresh, 2000);
+    return () => window.clearInterval(id);
   }, []);
 
   const modules = useMemo(

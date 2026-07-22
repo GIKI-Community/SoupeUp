@@ -1,5 +1,7 @@
 import { Loader2, Play, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { PluginStatusBadge } from "@/components/status-badges";
 import { Badge } from "@/components/ui/badge";
@@ -16,9 +18,15 @@ import {
 } from "@/components/ui/table";
 import { PageHeader } from "@/layouts/app-layout";
 import { usePluginsStore, usePythonRuntimeStore } from "@/stores";
-import type { Plugin, PythonRuntimeHealth } from "@/types";
+import type { Plugin, PluginUpdateCheck, PythonRuntimeHealth } from "@/types";
 
 const PYTHON_RUNTIME_ID = "plugin-python-runtime";
+
+const SETTINGS_TAB_BY_PLUGIN: Record<string, string> = {
+  "plugin-python-runtime": "python",
+  "plugin-dask-scheduler": "dask",
+  "plugin-ray": "ray",
+};
 
 function healthVariant(
   status: PythonRuntimeHealth["status"],
@@ -206,50 +214,153 @@ function PythonRuntimeDetail() {
   );
 }
 
+function UpdateNotice({ check }: { check: PluginUpdateCheck }) {
+  if (check.recommendation === "none") {
+    return (
+      <p className="mt-3 rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+        {check.message}
+      </p>
+    );
+  }
+
+  if (check.recommendation === "pluginUpdate") {
+    return (
+      <div className="mt-3 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm">
+        <p className="font-medium text-emerald-700 dark:text-emerald-300">
+          Update available (compatible)
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          v{check.installedVersion}
+          {check.availableVersion ? ` → v${check.availableVersion}` : ""} —{" "}
+          {check.message}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Apply is not automated yet; reinstall from a newer package when ready.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+      <p className="font-medium text-amber-700 dark:text-amber-300">
+        App update required
+      </p>
+      <p className="mt-1 text-muted-foreground">{check.message}</p>
+      {check.releaseUrl && (
+        <Button
+          className="mt-2"
+          size="sm"
+          variant="outline"
+          onClick={() => void openUrl(check.releaseUrl!)}
+        >
+          Open app release
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function PluginCard({
   plugin,
   expanded,
   onToggle,
+  updateCheck,
+  busy,
+  onEnable,
+  onDisable,
+  onCheckUpdate,
+  onUninstall,
+  onSettings,
 }: {
   plugin: Plugin;
   expanded: boolean;
   onToggle: () => void;
+  updateCheck?: PluginUpdateCheck;
+  busy: boolean;
+  onEnable: () => void;
+  onDisable: () => void;
+  onCheckUpdate: () => void;
+  onUninstall: () => void;
+  onSettings: () => void;
 }) {
   const isPython = plugin.id === PYTHON_RUNTIME_ID;
+  const mandatory = plugin.mandatory === true;
+  const enabled = plugin.enabled !== false && plugin.status !== "disabled";
+  const incompatible = plugin.status === "incompatible";
+  const hasSettings = plugin.id in SETTINGS_TAB_BY_PLUGIN;
 
   return (
     <Card className="border-border/60 bg-card/80 transition-colors hover:border-border">
       <CardHeader className="flex flex-row items-start justify-between space-y-0">
         <div className="space-y-1">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
             <CardTitle className="text-base">{plugin.name}</CardTitle>
             <PluginStatusBadge status={plugin.status} />
+            {mandatory && <Badge variant="secondary">Required</Badge>}
+            {plugin.isDefault && <Badge variant="outline">Default</Badge>}
+            {plugin.pluginType && (
+              <Badge variant="outline">{plugin.pluginType}</Badge>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
             v{plugin.version} · {plugin.author}
+            {plugin.appCompat ? ` · app ${plugin.appCompat}` : ""}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           {isPython && (
             <Button variant="outline" size="sm" onClick={onToggle}>
               {expanded ? "Hide" : "Manage"}
             </Button>
           )}
-          {plugin.status === "disabled" ? (
-            <Button variant="outline" size="sm">
-              Enable
-            </Button>
-          ) : (
-            <Button variant="outline" size="sm">
+          {enabled ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || mandatory || incompatible}
+              title={
+                mandatory
+                  ? "Required plugins cannot be disabled"
+                  : undefined
+              }
+              onClick={onDisable}
+            >
               Disable
             </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy || incompatible}
+              onClick={onEnable}
+            >
+              Enable
+            </Button>
           )}
-          <Button variant="outline" size="sm">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={onCheckUpdate}
+          >
             Update
           </Button>
-          <Button variant="ghost" size="icon">
-            <Settings2 className="h-4 w-4" />
-          </Button>
+          {!mandatory && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={onUninstall}
+            >
+              Uninstall
+            </Button>
+          )}
+          {hasSettings && (
+            <Button variant="ghost" size="icon" onClick={onSettings}>
+              <Settings2 className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -257,6 +368,7 @@ function PluginCard({
         <p className="mt-2 font-mono text-xs text-muted-foreground/70">
           {plugin.id}
         </p>
+        {updateCheck && <UpdateNotice check={updateCheck} />}
         {isPython && expanded && <PythonRuntimeDetail />}
       </CardContent>
     </Card>
@@ -264,8 +376,22 @@ function PluginCard({
 }
 
 export function PluginsPage() {
-  const { plugins, fetchPlugins } = usePluginsStore();
+  const navigate = useNavigate();
+  const {
+    plugins,
+    actionError,
+    updateChecks,
+    fetchPlugins,
+    setEnabled,
+    install,
+    uninstall,
+    checkUpdate,
+    clearActionError,
+  } = usePluginsStore();
   const [expandedId, setExpandedId] = useState<string | null>(PYTHON_RUNTIME_ID);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [installPath, setInstallPath] = useState("");
+  const [showInstall, setShowInstall] = useState(false);
 
   useEffect(() => {
     void fetchPlugins();
@@ -275,13 +401,75 @@ export function PluginsPage() {
     return () => window.clearInterval(id);
   }, [fetchPlugins]);
 
+  const runBusy = async (id: string, fn: () => Promise<unknown>) => {
+    setBusyId(id);
+    try {
+      await fn();
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
         title="Plugins"
         description="Execution engines and extensions for your cluster"
-        actions={<Button>Install Plugin</Button>}
+        actions={
+          <Button
+            onClick={() => {
+              clearActionError();
+              setShowInstall((v) => !v);
+            }}
+          >
+            Install Plugin
+          </Button>
+        }
       />
+
+      {actionError && (
+        <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
+
+      {showInstall && (
+        <Card className="mb-4 border-border/60 bg-card/80">
+          <CardHeader>
+            <CardTitle className="text-base">Install from folder</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[16rem] flex-1 space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Path to a plugin directory containing manifest.toml
+              </p>
+              <Input
+                value={installPath}
+                onChange={(e) => setInstallPath(e.target.value)}
+                placeholder="C:\path\to\plugin-package"
+                className="bg-background font-mono text-sm"
+              />
+            </div>
+            <Button
+              disabled={!installPath.trim() || busyId === "__install__"}
+              onClick={() => {
+                void runBusy("__install__", async () => {
+                  const ok = await install(installPath.trim());
+                  if (ok) {
+                    setInstallPath("");
+                    setShowInstall(false);
+                  }
+                });
+              }}
+            >
+              {busyId === "__install__" ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Install
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4">
         {plugins.map((plugin) => (
@@ -289,11 +477,33 @@ export function PluginsPage() {
             key={plugin.id}
             plugin={plugin}
             expanded={expandedId === plugin.id}
+            updateCheck={updateChecks[plugin.id]}
+            busy={busyId === plugin.id}
             onToggle={() =>
               setExpandedId((current) =>
                 current === plugin.id ? null : plugin.id,
               )
             }
+            onEnable={() => {
+              void runBusy(plugin.id, () => setEnabled(plugin.id, true));
+            }}
+            onDisable={() => {
+              void runBusy(plugin.id, () => setEnabled(plugin.id, false));
+            }}
+            onCheckUpdate={() => {
+              void runBusy(plugin.id, () => checkUpdate(plugin.id));
+            }}
+            onUninstall={() => {
+              if (
+                !window.confirm(
+                  `Uninstall ${plugin.name}? This removes it from the plugins directory.`,
+                )
+              ) {
+                return;
+              }
+              void runBusy(plugin.id, () => uninstall(plugin.id));
+            }}
+            onSettings={() => navigate("/settings")}
           />
         ))}
       </div>

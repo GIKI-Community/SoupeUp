@@ -36,6 +36,7 @@ const pluginStatusVariant: Record<
   running: "success",
   error: "destructive",
   disabled: "muted",
+  incompatible: "destructive",
 };
 
 const serviceStatusVariant: Record<

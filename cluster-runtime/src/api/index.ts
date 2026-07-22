@@ -20,6 +20,7 @@ import type {
   Node,
   PackageInfo,
   Plugin,
+  PluginUpdateCheck,
   PythonRuntimeHealth,
   RayClusterSnapshot,
   RayHeadInfo,
@@ -86,6 +87,13 @@ export const SchedulerApi = {
 
 export const PluginApi = {
   list: () => invokeCommand<Plugin[]>("get_plugins"),
+  setEnabled: (id: string, enabled: boolean) =>
+    invokeCommand<Plugin>("plugin_set_enabled", { id, enabled }),
+  install: (sourcePath: string, force?: boolean) =>
+    invokeCommand<Plugin>("plugin_install", { sourcePath, force }),
+  uninstall: (id: string) => invokeCommand<void>("plugin_uninstall", { id }),
+  checkUpdate: (id: string) =>
+    invokeCommand<PluginUpdateCheck>("plugin_check_update", { id }),
 };
 
 export const MetricsApi = {
