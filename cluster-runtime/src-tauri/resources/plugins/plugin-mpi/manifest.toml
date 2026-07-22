@@ -1,0 +1,16 @@
+id = "plugin-mpi"
+name = "MPI"
+version = "0.1.0"
+author = "Cluster Runtime Team"
+description = "Message Passing Interface jobs via mpirun/mpiexec (OpenMPI, MPICH, or Microsoft MPI)."
+plugin_type = "scheduler"
+factory = "plugin-mpi"
+mandatory = false
+default = false
+app_compat = ">=0.1.0,<0.2.0"
+dependencies = []
+capabilities = [
+  "MPI Launch",
+  "Multi-rank Jobs",
+  "Process Group Cancel",
+]

@@ -1,0 +1,17 @@
+id = "plugin-python-runtime"
+name = "Python Runtime"
+version = "0.1.0"
+author = "Cluster Runtime Team"
+description = "Embedded Python runtime with virtual environments, package management, and code execution."
+plugin_type = "runtime"
+factory = "plugin-python-runtime"
+mandatory = true
+default = false
+app_compat = ">=0.1.0,<0.2.0"
+dependencies = []
+capabilities = [
+  "Python Execution",
+  "Package Management",
+  "Virtual Environment Management",
+  "Script Execution",
+]

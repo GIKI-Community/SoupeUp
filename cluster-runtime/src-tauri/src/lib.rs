@@ -12,7 +12,7 @@ mod mpi;
 mod ray;
 mod events;
 mod jobs;
-mod logging;
+pub mod logging;
 mod metrics;
 mod network;
 mod nodes;
@@ -44,6 +44,7 @@ use python_runtime::PythonExecutionService;
 use ray::RayService;
 use scheduler::SchedulerRegistry;
 
+#[derive(Clone)]
 pub struct AppState {
     pub plugin_registry: Arc<tokio::sync::RwLock<PluginRegistry>>,
     pub event_bus: Arc<EventBus>,
@@ -115,6 +116,8 @@ impl Default for AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    crate::logging::init();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -122,6 +125,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from("./data"));
+            log::info!("app: data_dir={}", data_dir.display());
             let state = AppState::new(data_dir);
             app.manage(state);
 
@@ -139,6 +143,10 @@ pub fn run() {
             commands::get_nodes,
             commands::get_jobs,
             commands::get_plugins,
+            commands::plugin_set_enabled,
+            commands::plugin_install,
+            commands::plugin_uninstall,
+            commands::plugin_check_update,
             commands::get_metrics,
             commands::get_logs,
             commands::get_cluster_summary,

@@ -1,3 +1,6 @@
+pub mod discover;
+pub mod enabled;
+pub mod install;
 pub mod manifest;
 
 use libloading::{Library, Symbol};
@@ -23,19 +26,19 @@ impl PluginLoader {
         toml::from_str(&content).map_err(|e| e.to_string())
     }
 
-    /// Dynamically load a plugin DLL
+    /// Dynamically load a plugin DLL (legacy path; unused by host factories).
     pub unsafe fn load_plugin<P: AsRef<Path>>(&mut self, path: P) -> Result<Box<dyn PluginApi>, String> {
         let lib = Library::new(path.as_ref()).map_err(|e| e.to_string())?;
-        
-        // Find the plugin creation entry point
         let create_fn: Symbol<PluginCreateFn> = lib.get(b"_plugin_create\0").map_err(|e| e.to_string())?;
-        
-        // Create the plugin instance
         let plugin_ptr = create_fn();
         let plugin = Box::from_raw(plugin_ptr);
-        
         self.loaded_libs.push(Arc::new(lib));
-        
         Ok(plugin)
+    }
+}
+
+impl Default for PluginLoader {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -1,5 +1,4 @@
 use crate::core::{mock_activity, mock_system_info, mock_system_status, ActivityEntry, SystemInfo, SystemStatus};
-use crate::logging::{mock_logs, LogEntry};
 use crate::metrics::{mock_metrics, MetricsSnapshot};
 use crate::nodes::{mock_nodes};
 use crate::network::{ClusterSummary, PeerInfo};
@@ -125,13 +124,142 @@ pub async fn get_plugins(
 }
 
 #[tauri::command]
+pub async fn plugin_set_enabled(
+    state: tauri::State<'_, crate::AppState>,
+    id: String,
+    enabled: bool,
+) -> Result<PluginInfo, String> {
+    let manifest = {
+        let reg = state.plugin_registry.read().await;
+        reg.get_manifest(&id)
+            .cloned()
+            .ok_or_else(|| format!("Plugin '{id}' not found"))?
+    };
+
+    if !enabled {
+        crate::plugin_loader::enabled::set_enabled(
+            &state.data_dir,
+            &id,
+            false,
+            &manifest,
+        )?;
+        crate::plugin_host::factories::stop_plugin(&id, &state).await?;
+    } else {
+        crate::plugin_host::factories::enable_and_start(&state, &id).await?;
+    }
+
+    let reg = state.plugin_registry.read().await;
+    reg.get_plugin_info(&id)
+        .cloned()
+        .ok_or_else(|| format!("Plugin '{id}' not found after update"))
+}
+
+#[tauri::command]
+pub async fn plugin_install(
+    state: tauri::State<'_, crate::AppState>,
+    source_path: String,
+    force: Option<bool>,
+) -> Result<PluginInfo, String> {
+    let app_version = env!("CARGO_PKG_VERSION");
+    let force = force.unwrap_or(false);
+    let (_dest, manifest) = crate::plugin_loader::install::install_from_path(
+        &state.data_dir,
+        std::path::Path::new(&source_path),
+        app_version,
+        force,
+    )?;
+
+    let enabled = crate::plugin_loader::enabled::is_enabled(
+        &crate::plugin_loader::enabled::load(&state.data_dir),
+        &manifest,
+    );
+    let compatible = manifest.is_compatible_with_app(app_version);
+    let status = if !compatible {
+        crate::plugin_registry::PluginStatus::Incompatible
+    } else if !enabled {
+        crate::plugin_registry::PluginStatus::Disabled
+    } else {
+        crate::plugin_registry::PluginStatus::Discovered
+    };
+
+    {
+        let mut reg = state.plugin_registry.write().await;
+        reg.upsert(
+            PluginInfo::from_manifest(&manifest, status, enabled),
+            manifest.clone(),
+        );
+    }
+
+    if enabled && compatible {
+        if let Err(e) =
+            crate::plugin_host::factories::enable_and_start(&state, &manifest.id).await
+        {
+            log::warn!("Installed {} but start failed: {e}", manifest.id);
+            let mut reg = state.plugin_registry.write().await;
+            reg.update_plugin_status(&manifest.id, crate::plugin_registry::PluginStatus::Error);
+        }
+    }
+
+    let reg = state.plugin_registry.read().await;
+    reg.get_plugin_info(&manifest.id)
+        .cloned()
+        .ok_or_else(|| "Install succeeded but plugin missing from registry".into())
+}
+
+#[tauri::command]
+pub async fn plugin_uninstall(
+    state: tauri::State<'_, crate::AppState>,
+    id: String,
+) -> Result<(), String> {
+    let manifest = {
+        let reg = state.plugin_registry.read().await;
+        reg.get_manifest(&id)
+            .cloned()
+            .ok_or_else(|| format!("Plugin '{id}' not found"))?
+    };
+
+    if manifest.mandatory {
+        return Err(format!(
+            "Plugin '{}' is required and cannot be uninstalled",
+            manifest.name
+        ));
+    }
+
+    // Stop if running / enabled.
+    let _ = crate::plugin_host::factories::stop_plugin(&id, &state).await;
+    crate::plugin_loader::install::uninstall(&state.data_dir, &id, &manifest)?;
+
+    let mut cfg = crate::plugin_loader::enabled::load(&state.data_dir);
+    cfg.enabled.remove(&id);
+    let _ = crate::plugin_loader::enabled::save(&state.data_dir, &cfg);
+
+    let mut reg = state.plugin_registry.write().await;
+    reg.remove(&id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn plugin_check_update(
+    state: tauri::State<'_, crate::AppState>,
+    id: String,
+) -> Result<crate::plugin_host::update_check::PluginUpdateCheck, String> {
+    let manifest = {
+        let reg = state.plugin_registry.read().await;
+        reg.get_manifest(&id)
+            .cloned()
+            .ok_or_else(|| format!("Plugin '{id}' not found"))?
+    };
+    crate::plugin_host::update_check::check_plugin_update(&manifest).await
+}
+
+#[tauri::command]
 pub fn get_metrics() -> MetricsSnapshot {
     mock_metrics()
 }
 
 #[tauri::command]
-pub fn get_logs() -> Vec<LogEntry> {
-    mock_logs()
+pub fn get_logs() -> Vec<crate::logging::LogEntry> {
+    crate::logging::recent_logs()
 }
 
 // ─── Python Runtime Commands ──────────────────────────────────────────────────
@@ -972,27 +1100,24 @@ pub async fn scheduler_set_active(
 pub async fn mpi_ensure_toolchain(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<crate::mpi::MpiToolchain, String> {
-    let svc = state
-        .mpi_service
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "MPI service not initialized".to_string())?;
-    svc.ensure_toolchain()
-        .await
-        .map_err(|e| e.to_string())
+    let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
+        log::warn!("mpi_ensure_toolchain: service slot empty (plugins still loading?)");
+        "MPI service not initialized yet — wait for plugins to finish loading".to_string()
+    })?;
+    log::info!("mpi_ensure_toolchain: re-running discovery");
+    svc.ensure_toolchain().await.map_err(|e| {
+        log::error!("mpi_ensure_toolchain: {e}");
+        e.to_string()
+    })
 }
 
 #[tauri::command]
 pub async fn mpi_get_settings(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<crate::mpi::settings::MpiSettings, String> {
-    let svc = state
-        .mpi_service
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
+        "MPI service not initialized yet — wait for plugins to finish loading".to_string()
+    })?;
     Ok(svc.settings().await)
 }
 
@@ -1001,28 +1126,29 @@ pub async fn mpi_update_settings(
     state: tauri::State<'_, crate::AppState>,
     settings: crate::mpi::settings::MpiSettings,
 ) -> Result<(), String> {
-    let svc = state
-        .mpi_service
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "MPI service not initialized".to_string())?;
-    svc.update_settings(settings).await.map_err(|e| e.to_string())
+    let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
+        "MPI service not initialized yet — wait for plugins to finish loading".to_string()
+    })?;
+    log::info!("mpi_update_settings: applying and rediscovering toolchain");
+    svc.update_settings(settings).await.map_err(|e| {
+        log::error!("mpi_update_settings: {e}");
+        e.to_string()
+    })
 }
 
 #[tauri::command]
 pub async fn mpi_status(
     state: tauri::State<'_, crate::AppState>,
 ) -> Result<serde_json::Value, String> {
-    let svc = state
-        .mpi_service
-        .read()
-        .await
-        .clone()
-        .ok_or_else(|| "MPI service not initialized".to_string())?;
+    let svc = state.mpi_service.read().await.clone().ok_or_else(|| {
+        log::warn!("mpi_status: service slot empty (plugins still loading?)");
+        "MPI service not initialized yet — wait for plugins to finish loading".to_string()
+    })?;
     let tc = svc.toolchain().await;
+    let ready = svc.is_ready().await;
+    log::debug!("mpi_status: ready={ready} toolchain={tc:?}");
     Ok(serde_json::json!({
-        "ready": svc.is_ready().await,
+        "ready": ready,
         "toolchain": tc,
     }))
 }

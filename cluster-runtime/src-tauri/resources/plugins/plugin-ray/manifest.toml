@@ -1,0 +1,18 @@
+id = "plugin-ray"
+name = "Ray"
+version = "0.1.0"
+author = "Cluster Runtime Team"
+description = "Distributed computing via Ray.io. Uses the Python Runtime for execution and packages."
+plugin_type = "scheduler"
+factory = "plugin-ray"
+mandatory = false
+default = false
+app_compat = ">=0.1.0,<0.2.0"
+dependencies = ["plugin-python-runtime"]
+capabilities = [
+  "Distributed Scheduling",
+  "Distributed Workers",
+  "Task Submission",
+  "Cluster Monitoring",
+  "Dashboard Integration",
+]

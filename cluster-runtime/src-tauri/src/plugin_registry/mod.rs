@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_api::PluginApi;
+use crate::plugin_loader::manifest::PluginManifest;
 use crate::plugin_loader::PluginLoader;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -14,6 +15,7 @@ pub enum PluginStatus {
     Running,
     Error,
     Disabled,
+    Incompatible,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,18 +27,44 @@ pub struct PluginInfo {
     pub status: PluginStatus,
     pub author: String,
     pub description: String,
-    /// Optional list of capability tags shown in the UI.
     #[serde(default)]
     pub capabilities: Vec<String>,
-    /// Plugin type, e.g. "Runtime", "Scheduler", "Exporter"
     #[serde(default)]
     pub plugin_type: String,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mandatory: bool,
+    #[serde(default)]
+    pub app_compat: String,
+    #[serde(default)]
+    pub is_default: bool,
+}
+
+impl PluginInfo {
+    pub fn from_manifest(m: &PluginManifest, status: PluginStatus, enabled: bool) -> Self {
+        Self {
+            id: m.id.clone(),
+            name: m.name.clone(),
+            version: m.version.clone(),
+            status,
+            author: m.author.clone(),
+            description: m.description.clone(),
+            capabilities: m.capabilities.clone(),
+            plugin_type: m.display_plugin_type(),
+            enabled,
+            mandatory: m.mandatory,
+            app_compat: m.app_compat.clone(),
+            is_default: m.default,
+        }
+    }
 }
 
 #[allow(dead_code)]
 pub struct PluginRegistry {
     plugins: HashMap<String, Box<dyn PluginApi>>,
     info: HashMap<String, PluginInfo>,
+    manifests: HashMap<String, PluginManifest>,
     loader: PluginLoader,
 }
 
@@ -45,20 +73,20 @@ impl PluginRegistry {
         Self {
             plugins: HashMap::new(),
             info: HashMap::new(),
+            manifests: HashMap::new(),
             loader: PluginLoader::new(),
         }
     }
 
-    // ─── Query ────────────────────────────────────────────────────────────────
-
     pub fn list_plugins(&self) -> Vec<PluginInfo> {
         let mut list: Vec<PluginInfo> = self.info.values().cloned().collect();
-        // Stable ordering: Python Runtime first, then alphabetical
         list.sort_by(|a, b| {
             if a.id == "plugin-python-runtime" {
                 std::cmp::Ordering::Less
             } else if b.id == "plugin-python-runtime" {
                 std::cmp::Ordering::Greater
+            } else if a.mandatory != b.mandatory {
+                b.mandatory.cmp(&a.mandatory)
             } else {
                 a.name.cmp(&b.name)
             }
@@ -70,117 +98,46 @@ impl PluginRegistry {
         self.info.get(id)
     }
 
-    // ─── Mutation ─────────────────────────────────────────────────────────────
+    pub fn get_manifest(&self, id: &str) -> Option<&PluginManifest> {
+        self.manifests.get(id)
+    }
 
-    /// Update the status of a registered plugin.
-    /// Used by the initialization background task to mark the Python Runtime
-    /// as Running (or Error) once the async setup completes.
+    pub fn upsert(&mut self, info: PluginInfo, manifest: PluginManifest) {
+        self.manifests.insert(info.id.clone(), manifest);
+        self.info.insert(info.id.clone(), info);
+    }
+
     pub fn update_plugin_status(&mut self, id: &str, status: PluginStatus) {
         if let Some(info) = self.info.get_mut(id) {
             info.status = status;
         }
     }
 
-    /// Register the Python Runtime Plugin with `Initializing` status.
-    /// Called synchronously during app startup before the async init task runs.
-    pub fn register_python_runtime(&mut self) {
-        let id = "plugin-python-runtime".to_string();
-        self.info.insert(
-            id.clone(),
-            PluginInfo {
-                id,
-                name: "Python Runtime".to_string(),
-                version: "0.1.0".to_string(),
-                status: PluginStatus::Initializing,
-                author: "Cluster Runtime Team".to_string(),
-                description: "Embedded Python 3.10 runtime with virtual environment, \
-                               package management, and code execution."
-                    .to_string(),
-                capabilities: vec![
-                    "Python Execution".to_string(),
-                    "Package Management".to_string(),
-                    "Virtual Environment Management".to_string(),
-                    "Script Execution".to_string(),
-                ],
-                plugin_type: "Runtime".to_string(),
-            },
-        );
+    pub fn set_enabled_flag(&mut self, id: &str, enabled: bool) {
+        if let Some(info) = self.info.get_mut(id) {
+            info.enabled = enabled;
+            if !enabled && info.status != PluginStatus::Incompatible {
+                info.status = PluginStatus::Disabled;
+            }
+        }
     }
 
-    /// Register the Dask Scheduler Plugin (starts as Initializing until packages are ready).
-    pub fn register_dask_scheduler(&mut self) {
-        let id = "plugin-dask-scheduler".to_string();
-        self.info.insert(
-            id.clone(),
-            PluginInfo {
-                id,
-                name: "Dask Scheduler".to_string(),
-                version: "0.1.0".to_string(),
-                status: PluginStatus::Initializing,
-                author: "Cluster Runtime Team".to_string(),
-                description: "Distributed scheduling via Dask. Uses the Python Runtime \
-                               Plugin for all execution and package management."
-                    .to_string(),
-                capabilities: vec![
-                    "Distributed Scheduling".to_string(),
-                    "Distributed Workers".to_string(),
-                    "Task Submission".to_string(),
-                    "Cluster Monitoring".to_string(),
-                    "Dashboard Integration".to_string(),
-                ],
-                plugin_type: "Scheduler".to_string(),
-            },
-        );
+    pub fn remove(&mut self, id: &str) {
+        self.info.remove(id);
+        self.manifests.remove(id);
     }
 
-    /// Register the Ray Plugin (starts as Initializing until packages are ready).
-    pub fn register_ray(&mut self) {
-        let id = "plugin-ray".to_string();
-        self.info.insert(
-            id.clone(),
-            PluginInfo {
-                id,
-                name: "Ray".to_string(),
-                version: "0.1.0".to_string(),
-                status: PluginStatus::Initializing,
-                author: "Cluster Runtime Team".to_string(),
-                description: "Distributed computing via Ray.io. Uses the Python Runtime \
-                               Plugin for all execution and package management."
-                    .to_string(),
-                capabilities: vec![
-                    "Distributed Scheduling".to_string(),
-                    "Distributed Workers".to_string(),
-                    "Task Submission".to_string(),
-                    "Cluster Monitoring".to_string(),
-                    "Dashboard Integration".to_string(),
-                ],
-                plugin_type: "Scheduler".to_string(),
-            },
-        );
-    }
-
-    /// Register the MPI Plugin (native mpirun/mpiexec; independent of Python).
-    pub fn register_mpi(&mut self) {
-        let id = "plugin-mpi".to_string();
-        self.info.insert(
-            id.clone(),
-            PluginInfo {
-                id,
-                name: "MPI".to_string(),
-                version: "0.1.0".to_string(),
-                status: PluginStatus::Initializing,
-                author: "Cluster Runtime Team".to_string(),
-                description: "Message Passing Interface jobs via mpirun/mpiexec \
-                               (OpenMPI, MPICH, or Microsoft MPI)."
-                    .to_string(),
-                capabilities: vec![
-                    "MPI Launch".to_string(),
-                    "Multi-rank Jobs".to_string(),
-                    "Process Group Cancel".to_string(),
-                ],
-                plugin_type: "Scheduler".to_string(),
-            },
-        );
+    pub fn default_scheduler_id(&self) -> Option<String> {
+        self.manifests
+            .values()
+            .find(|m| m.default && m.is_scheduler())
+            .map(|m| m.id.clone())
+            .or_else(|| {
+                self.manifests
+                    .values()
+                    .find(|m| m.is_scheduler() && m.mandatory)
+                    .map(|m| m.id.clone())
+            })
     }
 }
 

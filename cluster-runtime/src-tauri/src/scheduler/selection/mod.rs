@@ -39,13 +39,28 @@ impl SchedulerRegistry {
         self.schedulers.write().await.insert(id, scheduler);
     }
 
+    pub async fn unregister(&self, plugin_id: &str) {
+        self.schedulers.write().await.remove(plugin_id);
+    }
+
     pub async fn load_active(&self) {
         if let Ok(data) = tokio::fs::read_to_string(&self.config_path).await {
             if let Ok(cfg) = serde_json::from_str::<ActiveSchedulerConfig>(&data) {
-                let schedulers = self.schedulers.read().await;
-                if schedulers.contains_key(&cfg.plugin_id) {
-                    *self.active.write().await = cfg.plugin_id;
-                }
+                // Prefer persisted id even before schedulers register; validated again after load.
+                *self.active.write().await = cfg.plugin_id;
+            }
+        }
+    }
+
+    /// After plugins register, ensure `active` points at a registered scheduler.
+    pub async fn ensure_active_registered(&self, fallback_id: &str) {
+        let active = self.active_id().await;
+        let ok = self.schedulers.read().await.contains_key(&active);
+        if !ok {
+            if self.schedulers.read().await.contains_key(fallback_id) {
+                let _ = self.set_active(fallback_id).await;
+            } else if let Some(first) = self.schedulers.read().await.keys().next().cloned() {
+                let _ = self.set_active(&first).await;
             }
         }
     }

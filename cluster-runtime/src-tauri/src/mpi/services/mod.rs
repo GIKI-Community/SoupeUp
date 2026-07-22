@@ -30,13 +30,23 @@ impl MpiService {
     }
 
     pub async fn initialize(&self) -> MpiResult<()> {
+        log::info!("MPI: initialize() — starting toolchain discovery");
         let settings = self.settings.read().await.clone();
+        if let Some(pref) = &settings.preferred_launcher {
+            log::info!("MPI: preferred_launcher={pref}");
+        }
         match launcher::discover_toolchain(&settings).await {
             Ok(tc) => {
+                log::info!(
+                    "MPI: initialize ok — launcher={} flavour={:?}",
+                    tc.launcher,
+                    tc.flavour
+                );
                 *self.toolchain.write().await = Some(tc);
                 Ok(())
             }
             Err(e) => {
+                log::error!("MPI: initialize failed — {e}");
                 *self.toolchain.write().await = None;
                 Err(e)
             }
@@ -44,6 +54,10 @@ impl MpiService {
     }
 
     pub async fn set_python(&self, python: Option<Arc<PythonExecutionService>>) {
+        log::info!(
+            "MPI: set_python({})",
+            if python.is_some() { "Some" } else { "None" }
+        );
         *self.python.write().await = python;
     }
 
@@ -90,11 +104,28 @@ impl MpiService {
     }
 
     pub async fn run_job(&self, job_id: &str, spec: &JobSpec) -> MpiResult<MpiLaunchResult> {
-        let toolchain = self.ensure_toolchain().await?;
+        log::info!(
+            "MPI: run_job id={job_id} entry={:?}",
+            std::mem::discriminant(&spec.entry_point)
+        );
+        let toolchain = self.ensure_toolchain().await.map_err(|e| {
+            log::error!("MPI: run_job {job_id} toolchain missing: {e}");
+            e
+        })?;
         let settings = self.settings.read().await.clone();
 
-        let launch = self.build_launch_spec(spec, &settings).await?;
-        let proc = Arc::new(launcher::spawn(&toolchain, &settings, &launch).await?);
+        let launch = self.build_launch_spec(spec, &settings).await.map_err(|e| {
+            log::error!("MPI: run_job {job_id} build launch failed: {e}");
+            e
+        })?;
+        let proc = Arc::new(
+            launcher::spawn(&toolchain, &settings, &launch)
+                .await
+                .map_err(|e| {
+                    log::error!("MPI: run_job {job_id} spawn failed: {e}");
+                    e
+                })?,
+        );
         self.running
             .write()
             .await
