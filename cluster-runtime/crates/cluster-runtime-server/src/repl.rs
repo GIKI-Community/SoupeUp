@@ -53,21 +53,27 @@ pub async fn run_repl(state: AppState) {
             }
             "dask" => {
                 if parts.len() < 2 {
-                    println!("usage: dask status|start|stop");
+                    println!(
+                        "usage:\n  dask status\n  dask start|stop          # local scheduler (+ local worker on start)\n  dask worker start <url>  # join remote scheduler, e.g. tcp://10.21.5.4:8786\n  dask worker stop|status"
+                    );
                 } else {
-                    dask_cmd(&state, parts[1]).await;
+                    dask_cmd(&state, &parts[1..]).await;
                 }
             }
             "ray" => {
                 if parts.len() < 2 {
-                    println!("usage: ray status|start|stop");
+                    println!(
+                        "usage:\n  ray status\n  ray start|stop\n  ray worker start <addr>  # optional remote head\n  ray worker stop|status"
+                    );
                 } else {
-                    ray_cmd(&state, parts[1]).await;
+                    ray_cmd(&state, &parts[1..]).await;
                 }
             }
             "peer" => {
                 if parts.len() < 2 {
-                    println!("usage: peer list | peer connect <multiaddr>");
+                    println!(
+                        "usage: peer list | peer connect /ip4/<ip>/tcp/8080/ws\n  (P2P app mesh — NOT Dask. See 'help'.)"
+                    );
                 } else {
                     peer_cmd(&state, &parts[1..]).await;
                 }
@@ -94,12 +100,30 @@ fn print_help() {
   plugin enable|disable <id>   Toggle optional plugins
   scheduler                    Show active scheduler
   scheduler set <id>           Set active (dask|ray|mpi|plugin-…)
-  dask status|start|stop       Dask scheduler control
-  ray status|start|stop        Ray head control
-  peer list                    Connected P2P peers
-  peer connect <multiaddr>     Dial a peer
+
+  Dask compute cluster (scheduler/worker processes):
+  dask status                  Local Dask snapshot
+  dask start|stop              Start/stop LOCAL scheduler (and a local worker on start)
+  dask worker start <url>      Join a REMOTE scheduler as a worker
+                               example: dask worker start tcp://10.21.5.4:8786
+  dask worker stop|status      Stop / show local worker process
+
+  Ray:
+  ray status|start|stop
+  ray worker start [addr] | ray worker stop|status
+
+  P2P mesh (Cluster Runtime apps talking to each other — NOT Dask):
+  peer list                    Show this node's peer id + connected peers
+  peer connect <multiaddr>     Dial another Cluster Runtime (port 8080)
+                               example: peer connect /ip4/10.21.5.4/tcp/8080/ws
+                               Wrong:  peer connect 10.21.5.4
+
   logs [n]                     Last n log lines (default 40)
-  quit                         Stop the server"
+  quit                         Stop the server
+
+Quick pick:
+  Join Windows Dask scheduler as worker  →  dask worker start tcp://WINDOWS_IP:8786
+  Link two Cluster Runtime apps          →  peer connect /ip4/OTHER_IP/tcp/8080/ws"
     );
 }
 
@@ -246,26 +270,36 @@ async fn scheduler_set(state: &AppState, raw: &str) {
     }
 }
 
-async fn dask_cmd(state: &AppState, action: &str) {
+async fn dask_cmd(state: &AppState, args: &[&str]) {
     let Some(dask) = state.dask_service.read().await.clone() else {
         println!("dask service not loaded (is Python/Dask plugin running?)");
         return;
     };
-    match action.to_ascii_lowercase().as_str() {
+    let action = args[0].to_ascii_lowercase();
+    match action.as_str() {
         "status" => match dask.cluster_snapshot().await {
-            Ok(s) => println!(
-                "scheduler={:?} workers={} cores={}",
-                s.scheduler.status,
-                s.workers.len(),
-                s.total_cores
-            ),
+            Ok(s) => {
+                let w = dask.worker_status().await;
+                println!(
+                    "scheduler={:?} snapshot_workers={} cores={}",
+                    s.scheduler.status,
+                    s.workers.len(),
+                    s.total_cores
+                );
+                println!(
+                    "local_worker status={:?} name={} scheduler={} err={:?}",
+                    w.status, w.name, w.scheduler_address, w.error
+                );
+            }
             Err(e) => println!("error: {e}"),
         },
         "start" => match dask.start_scheduler().await {
             Ok(info) => {
-                println!("scheduler started: {:?}", info);
+                println!("local scheduler started: {:?}", info);
                 if let Err(e) = dask.start_worker(None).await {
-                    println!("worker start warning: {e}");
+                    println!("local worker start warning: {e}");
+                } else {
+                    println!("local worker started (joined local scheduler)");
                 }
             }
             Err(e) => println!("error: {e}"),
@@ -273,20 +307,75 @@ async fn dask_cmd(state: &AppState, action: &str) {
         "stop" => {
             let _ = dask.stop_worker().await;
             match dask.stop_scheduler().await {
-                Ok(info) => println!("stopped: {:?}", info),
+                Ok(info) => println!("local scheduler/worker stopped: {:?}", info),
                 Err(e) => println!("error: {e}"),
             }
         }
-        _ => println!("usage: dask status|start|stop"),
+        "worker" => {
+            if args.len() < 2 {
+                println!(
+                    "usage:\n  dask worker start tcp://HOST:8786\n  dask worker stop\n  dask worker status"
+                );
+                return;
+            }
+            match args[1].to_ascii_lowercase().as_str() {
+                "start" => {
+                    let addr = if args.len() >= 3 {
+                        Some(args[2].to_string())
+                    } else {
+                        None
+                    };
+                    if addr.is_none() {
+                        println!(
+                            "missing scheduler address.\nexample: dask worker start tcp://10.21.5.4:8786"
+                        );
+                        return;
+                    }
+                    let addr = addr.unwrap();
+                    if !addr.contains("://") {
+                        println!(
+                            "address looks wrong: '{addr}'\nuse full URL, e.g. tcp://10.21.5.4:8786"
+                        );
+                        return;
+                    }
+                    println!("starting Dask worker → {addr} …");
+                    match dask.start_worker(Some(addr.clone())).await {
+                        Ok(info) => println!(
+                            "worker started: status={:?} name={} (scheduler={addr})",
+                            info.status, info.name
+                        ),
+                        Err(e) => println!("error: {e}"),
+                    }
+                }
+                "stop" => match dask.stop_worker().await {
+                    Ok(info) => println!("worker stopped: {:?}", info.status),
+                    Err(e) => println!("error: {e}"),
+                },
+                "status" => {
+                    let w = dask.worker_status().await;
+                    println!(
+                        "worker status={:?} name={} scheduler={} pid={:?} err={:?}",
+                        w.status, w.name, w.scheduler_address, w.process_id, w.error
+                    );
+                }
+                _ => println!(
+                    "usage: dask worker start tcp://HOST:8786 | dask worker stop | dask worker status"
+                ),
+            }
+        }
+        _ => println!(
+            "usage: dask status|start|stop | dask worker start tcp://HOST:8786 | dask worker stop|status"
+        ),
     }
 }
 
-async fn ray_cmd(state: &AppState, action: &str) {
+async fn ray_cmd(state: &AppState, args: &[&str]) {
     let Some(ray) = state.ray_service.read().await.clone() else {
         println!("ray service not loaded");
         return;
     };
-    match action.to_ascii_lowercase().as_str() {
+    let action = args[0].to_ascii_lowercase();
+    match action.as_str() {
         "status" => match ray.cluster_snapshot().await {
             Ok(s) => println!(
                 "head={:?} workers={}",
@@ -311,7 +400,31 @@ async fn ray_cmd(state: &AppState, action: &str) {
                 Err(e) => println!("error: {e}"),
             }
         }
-        _ => println!("usage: ray status|start|stop"),
+        "worker" => {
+            if args.len() < 2 {
+                println!("usage: ray worker start [addr] | ray worker stop|status");
+                return;
+            }
+            match args[1].to_ascii_lowercase().as_str() {
+                "start" => {
+                    let addr = args.get(2).map(|s| (*s).to_string());
+                    match ray.start_worker(addr).await {
+                        Ok(info) => println!("ray worker started: {:?}", info),
+                        Err(e) => println!("error: {e}"),
+                    }
+                }
+                "stop" => match ray.stop_worker().await {
+                    Ok(info) => println!("ray worker stopped: {:?}", info),
+                    Err(e) => println!("error: {e}"),
+                },
+                "status" => {
+                    let w = ray.worker_status().await;
+                    println!("ray worker: {:?}", w);
+                }
+                _ => println!("usage: ray worker start [addr] | ray worker stop|status"),
+            }
+        }
+        _ => println!("usage: ray status|start|stop | ray worker …"),
     }
 }
 
@@ -324,6 +437,12 @@ async fn peer_cmd(state: &AppState, args: &[&str]) {
         "list" => match p2p.list_peers().await {
             Ok(peers) => {
                 println!("local={}", p2p.local_peer_id());
+                if let Ok(addrs) = p2p.listen_addrs().await {
+                    println!("listen_addrs (replace 0.0.0.0 with this machine's IP when dialing from elsewhere):");
+                    for a in addrs {
+                        println!("  {a}");
+                    }
+                }
                 if peers.is_empty() {
                     println!("(no connected peers)");
                 }
@@ -335,15 +454,29 @@ async fn peer_cmd(state: &AppState, args: &[&str]) {
         },
         "connect" => {
             if args.len() < 2 {
-                println!("usage: peer connect <multiaddr>");
+                println!(
+                    "usage: peer connect /ip4/<ip>/tcp/8080/ws\nexample: peer connect /ip4/10.21.5.4/tcp/8080/ws"
+                );
                 return;
             }
-            match p2p.connect(args[1]).await {
-                Ok(()) => println!("dialing {}", args[1]),
+            let addr = args[1];
+            if !addr.starts_with('/') {
+                println!(
+                    "invalid multiaddr '{addr}'.\n\
+                     peer connect is for Cluster Runtime P2P (port 8080), not Dask.\n\
+                     example: peer connect /ip4/10.21.5.4/tcp/8080/ws\n\
+                     to join a Dask scheduler instead: dask worker start tcp://10.21.5.4:8786"
+                );
+                return;
+            }
+            match p2p.connect(addr).await {
+                Ok(()) => println!("dialing {addr}"),
                 Err(e) => println!("error: {e}"),
             }
         }
-        _ => println!("usage: peer list | peer connect <multiaddr>"),
+        _ => println!(
+            "usage: peer list | peer connect /ip4/<ip>/tcp/8080/ws"
+        ),
     }
 }
 
