@@ -40,4 +40,26 @@ impl RaySettings {
     pub fn dashboard_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.dashboard_port)
     }
+
+    /// Normalize user input to `host:port` (GCS), filling CR default port 6379 when omitted.
+    /// Accepts `10.0.0.1`, `10.0.0.1:6379`, and strips accidental `tcp://` / `ray://`.
+    pub fn normalize_head_address(raw: &str) -> String {
+        let s = raw.trim();
+        if s.is_empty() {
+            return format!("127.0.0.1:{}", Self::default().gcs_port);
+        }
+        let rest = s
+            .strip_prefix("tcp://")
+            .or_else(|| s.strip_prefix("TCP://"))
+            .or_else(|| s.strip_prefix("ray://"))
+            .or_else(|| s.strip_prefix("RAY://"))
+            .unwrap_or(s);
+        // ray://host:10001 style client addresses keep host:port after strip of scheme;
+        // if only host remains, append GCS port.
+        if rest.contains(':') {
+            rest.to_string()
+        } else {
+            format!("{rest}:{}", Self::default().gcs_port)
+        }
+    }
 }

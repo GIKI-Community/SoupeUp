@@ -53,4 +53,22 @@ impl DaskSettings {
             format!("tcp://{}:{}", self.scheduler_host, self.scheduler_port)
         }
     }
+
+    /// Normalize user input to `tcp://host:port`, filling CR defaults when omitted.
+    /// Accepts `10.0.0.1`, `10.0.0.1:8786`, `tcp://10.0.0.1`, `tcp://10.0.0.1:8786`.
+    pub fn normalize_scheduler_address(raw: &str) -> String {
+        let s = raw.trim();
+        if s.is_empty() {
+            return format!("tcp://127.0.0.1:{}", Self::default().scheduler_port);
+        }
+        let rest = s
+            .strip_prefix("tcp://")
+            .or_else(|| s.strip_prefix("TCP://"))
+            .unwrap_or(s);
+        if rest.contains(':') {
+            format!("tcp://{rest}")
+        } else {
+            format!("tcp://{rest}:{}", Self::default().scheduler_port)
+        }
+    }
 }

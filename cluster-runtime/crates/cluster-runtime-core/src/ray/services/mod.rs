@@ -152,12 +152,13 @@ impl RayService {
 
     pub async fn start_worker(&self, head_address: Option<String>) -> RayResult<WorkerInfo> {
         self.ensure_packages().await?;
-        if let Some(ref addr) = head_address {
-            if !addr.trim().is_empty() {
-                self.settings.write().await.head_address = addr.clone();
-            }
+        let normalized = head_address
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| crate::ray::settings::RaySettings::normalize_head_address(&s));
+        if let Some(ref addr) = normalized {
+            self.settings.write().await.head_address = addr.clone();
         }
-        self.worker.start(head_address).await
+        self.worker.start(normalized).await
     }
 
     pub async fn stop_worker(&self) -> RayResult<WorkerInfo> {

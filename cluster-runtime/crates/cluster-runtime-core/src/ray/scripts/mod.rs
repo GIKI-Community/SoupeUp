@@ -163,20 +163,13 @@ pub fn worker_script(
     object_store_memory: &str,
     log_level: &str,
 ) -> String {
-    let num_cpus_expr = if num_cpus == 0 {
-        "None".to_string()
-    } else {
-        num_cpus.to_string()
-    };
-    let memory_expr = if object_store_memory.trim().is_empty() {
-        "None".to_string()
-    } else {
-        format!("{:?}", object_store_memory)
-    };
+    let _ = object_store_memory; // reserved for future ray start --object-store-memory
 
     format!(
         r#"
 import json
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -184,35 +177,93 @@ import uuid
 {logging_preamble}
 _configure_logging({log_level:?})
 
-import ray
-
 HEAD_ADDRESS = {head_address:?}
 BASE_NAME = {name:?}
 NAME = f"{{BASE_NAME}}-{{uuid.uuid4().hex[:8]}}"
-NUM_CPUS = {num_cpus_expr}
-OBJECT_STORE_MEMORY = {memory_expr}
+NUM_CPUS = {num_cpus}
 
-kwargs = {{
-    "address": HEAD_ADDRESS,
-    "ignore_reinit_error": True,
-    "logging_level": {log_level:?},
-}}
-if NUM_CPUS is not None:
-    kwargs["num_cpus"] = NUM_CPUS
-if OBJECT_STORE_MEMORY is not None:
-    kwargs["object_store_memory"] = OBJECT_STORE_MEMORY
+def _ray_cmd():
+    sibling = os.path.join(os.path.dirname(sys.executable), "ray.exe" if os.name == "nt" else "ray")
+    if os.path.isfile(sibling):
+        return [sibling]
+    found = shutil.which("ray")
+    if found:
+        return [found]
+    return [sys.executable, "-m", "ray.scripts.scripts"]
 
 try:
-    ray.init(**kwargs)
-    info = {{
-        "ok": True,
-        "name": NAME,
-        "address": HEAD_ADDRESS,
-        "nodeId": ray.get_runtime_context().get_node_id(),
-    }}
-    print("RAY_WORKER_READY " + json.dumps(info), flush=True)
-    while True:
-        time.sleep(3600)
+    # Join an existing head as a worker node (not ray.init driver mode).
+    cmd = _ray_cmd() + [
+        "start",
+        f"--address={{HEAD_ADDRESS}}",
+        "--block",
+    ]
+    if NUM_CPUS:
+        cmd.append(f"--num-cpus={{NUM_CPUS}}")
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    ready = False
+    deadline = time.time() + 90
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            out = ""
+            try:
+                out = proc.stdout.read() if proc.stdout else ""
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"ray start --address exited early (code={{proc.returncode}}): {{(out or '')[-2000:]}}"
+            )
+        try:
+            import ray
+            ray.init(address=HEAD_ADDRESS, ignore_reinit_error=True, logging_level="warning")
+            node_id = ray.get_runtime_context().get_node_id()
+            ray.shutdown()
+            ready = True
+            info = {{
+                "ok": True,
+                "name": NAME,
+                "address": HEAD_ADDRESS,
+                "nodeId": node_id,
+            }}
+            print("RAY_WORKER_READY " + json.dumps(info), flush=True)
+            break
+        except Exception:
+            time.sleep(0.75)
+
+    if not ready:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Ray worker did not become ready. Is the head running and reachable at " + HEAD_ADDRESS + "?"
+        )
+
+    try:
+        while True:
+            if proc.poll() is not None:
+                raise RuntimeError(f"ray worker exited (code={{proc.returncode}})")
+            time.sleep(1)
+    finally:
+        stop = _ray_cmd() + ["stop", "--force"]
+        try:
+            subprocess.run(stop, check=False, capture_output=True, text=True, timeout=45)
+        except Exception:
+            pass
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except Exception:
+                proc.kill()
 except Exception as exc:
     print("RAY_WORKER_ERROR " + json.dumps({{"ok": False, "error": str(exc)}}), flush=True)
     sys.exit(1)
@@ -220,8 +271,7 @@ except Exception as exc:
         logging_preamble = LOGGING_PREAMBLE,
         head_address = head_address,
         name = name,
-        num_cpus_expr = num_cpus_expr,
-        memory_expr = memory_expr,
+        num_cpus = num_cpus,
         log_level = log_level,
     )
 }

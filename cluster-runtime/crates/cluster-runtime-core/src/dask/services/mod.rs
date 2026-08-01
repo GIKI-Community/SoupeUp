@@ -149,13 +149,13 @@ impl DaskService {
 
     pub async fn start_worker(&self, scheduler_address: Option<String>) -> DaskResult<WorkerInfo> {
         self.ensure_packages().await?;
-        // Persist address into settings when provided.
-        if let Some(ref addr) = scheduler_address {
-            if !addr.trim().is_empty() {
-                self.settings.write().await.scheduler_address = addr.clone();
-            }
+        let normalized = scheduler_address
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| crate::dask::settings::DaskSettings::normalize_scheduler_address(&s));
+        if let Some(ref addr) = normalized {
+            self.settings.write().await.scheduler_address = addr.clone();
         }
-        self.worker.start(scheduler_address).await
+        self.worker.start(normalized).await
     }
 
     pub async fn stop_worker(&self) -> DaskResult<WorkerInfo> {

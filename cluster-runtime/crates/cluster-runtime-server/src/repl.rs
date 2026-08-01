@@ -54,7 +54,7 @@ pub async fn run_repl(state: AppState) {
             "dask" => {
                 if parts.len() < 2 {
                     println!(
-                        "usage:\n  dask status\n  dask start|stop          # local scheduler (+ local worker on start)\n  dask worker start <url>  # join remote scheduler, e.g. tcp://10.21.5.4:8786\n  dask worker stop|status"
+                        "usage:\n  dask status\n  dask start|stop          # local scheduler (+ local worker on start)\n  dask worker start <host>  # e.g. 10.21.5.4  (default tcp://…:8786)\n  dask worker stop|status"
                     );
                 } else {
                     dask_cmd(&state, &parts[1..]).await;
@@ -63,7 +63,7 @@ pub async fn run_repl(state: AppState) {
             "ray" => {
                 if parts.len() < 2 {
                     println!(
-                        "usage:\n  ray status\n  ray start|stop\n  ray worker start <addr>  # optional remote head\n  ray worker stop|status"
+                        "usage:\n  ray status\n  ray start|stop\n  ray worker start <host>  # e.g. 10.21.5.4  (default :6379)\n  ray worker stop|status"
                     );
                 } else {
                     ray_cmd(&state, &parts[1..]).await;
@@ -104,26 +104,30 @@ fn print_help() {
   Dask compute cluster (scheduler/worker processes):
   dask status                  Local Dask snapshot
   dask start|stop              Start/stop LOCAL scheduler (and a local worker on start)
-  dask worker start <url>      Join a REMOTE scheduler as a worker
-                               example: dask worker start tcp://10.21.5.4:8786
+  dask worker start <host>     Join a REMOTE scheduler as a worker (default port 8786)
+                               examples: dask worker start 10.21.5.4
+                                         dask worker start tcp://10.21.5.4:8786
   dask worker stop|status      Stop / show local worker process
 
   Ray:
   ray status|start|stop
-  ray worker start [addr] | ray worker stop|status
+  ray worker start <host>      Join remote Ray head (default GCS port 6379)
+                               examples: ray worker start 10.21.5.4
+                                         ray worker start 10.21.5.4:6379
+  ray worker stop|status
 
-  P2P mesh (Cluster Runtime apps talking to each other — NOT Dask):
+  P2P mesh (Cluster Runtime apps talking to each other — NOT Dask/Ray):
   peer list                    Show this node's peer id + connected peers
   peer connect <multiaddr>     Dial another Cluster Runtime (port 8080)
                                example: peer connect /ip4/10.21.5.4/tcp/8080/ws
-                               Wrong:  peer connect 10.21.5.4
 
   logs [n]                     Last n log lines (default 40)
   quit                         Stop the server
 
 Quick pick:
-  Join Windows Dask scheduler as worker  →  dask worker start tcp://WINDOWS_IP:8786
-  Link two Cluster Runtime apps          →  peer connect /ip4/OTHER_IP/tcp/8080/ws"
+  Join Windows Ray head as worker   →  ray worker start WINDOWS_IP
+  Join Windows Dask as worker       →  dask worker start WINDOWS_IP
+  Link two Cluster Runtime apps     →  peer connect /ip4/OTHER_IP/tcp/8080/ws"
     );
 }
 
@@ -314,7 +318,7 @@ async fn dask_cmd(state: &AppState, args: &[&str]) {
         "worker" => {
             if args.len() < 2 {
                 println!(
-                    "usage:\n  dask worker start tcp://HOST:8786\n  dask worker stop\n  dask worker status"
+                    "usage:\n  dask worker start <host>\n  dask worker stop\n  dask worker status"
                 );
                 return;
             }
@@ -327,22 +331,16 @@ async fn dask_cmd(state: &AppState, args: &[&str]) {
                     };
                     if addr.is_none() {
                         println!(
-                            "missing scheduler address.\nexample: dask worker start tcp://10.21.5.4:8786"
+                            "missing host.\nexample: dask worker start 10.21.5.4\n         (uses default port 8786)"
                         );
                         return;
                     }
                     let addr = addr.unwrap();
-                    if !addr.contains("://") {
-                        println!(
-                            "address looks wrong: '{addr}'\nuse full URL, e.g. tcp://10.21.5.4:8786"
-                        );
-                        return;
-                    }
-                    println!("starting Dask worker → {addr} …");
-                    match dask.start_worker(Some(addr.clone())).await {
+                    println!("starting Dask worker → {addr} (ports filled if omitted) …");
+                    match dask.start_worker(Some(addr)).await {
                         Ok(info) => println!(
-                            "worker started: status={:?} name={} (scheduler={addr})",
-                            info.status, info.name
+                            "worker started: status={:?} name={} scheduler={}",
+                            info.status, info.name, info.scheduler_address
                         ),
                         Err(e) => println!("error: {e}"),
                     }
@@ -359,12 +357,12 @@ async fn dask_cmd(state: &AppState, args: &[&str]) {
                     );
                 }
                 _ => println!(
-                    "usage: dask worker start tcp://HOST:8786 | dask worker stop | dask worker status"
+                    "usage: dask worker start <host> | dask worker stop | dask worker status"
                 ),
             }
         }
         _ => println!(
-            "usage: dask status|start|stop | dask worker start tcp://HOST:8786 | dask worker stop|status"
+            "usage: dask status|start|stop | dask worker start <host> | dask worker stop|status"
         ),
     }
 }
@@ -408,8 +406,19 @@ async fn ray_cmd(state: &AppState, args: &[&str]) {
             match args[1].to_ascii_lowercase().as_str() {
                 "start" => {
                     let addr = args.get(2).map(|s| (*s).to_string());
-                    match ray.start_worker(addr).await {
-                        Ok(info) => println!("ray worker started: {:?}", info),
+                    if addr.is_none() {
+                        println!(
+                            "missing host.\nexample: ray worker start 10.21.5.4\n         (uses default GCS port 6379)"
+                        );
+                        return;
+                    }
+                    let addr = addr.unwrap();
+                    println!("starting Ray worker → {addr} (port filled if omitted) …");
+                    match ray.start_worker(Some(addr)).await {
+                        Ok(info) => println!(
+                            "ray worker started: status={:?} name={} head={}",
+                            info.status, info.name, info.head_address
+                        ),
                         Err(e) => println!("error: {e}"),
                     }
                 }

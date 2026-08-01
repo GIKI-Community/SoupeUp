@@ -124,6 +124,14 @@ impl BackgroundProcessManager {
         cmd.stdin(std::process::Stdio::null());
         cmd.kill_on_drop(true);
 
+        // Put the child in its own process group so Ray/Dask signal storms
+        // (e.g. killpg on failure) cannot SIGTERM the Cluster Runtime parent.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+
         #[cfg(windows)]
         {
             // CREATE_NO_WINDOW | CREATE_SUSPENDED is not available via tokio easily;
