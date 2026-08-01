@@ -20,7 +20,7 @@ pub struct JobManager {
     history: Arc<JobHistoryStore>,
     results: Arc<ResultStore>,
     progress: Arc<ProgressTracker>,
-    queue: tokio::sync::Mutex<JobQueue>,
+    queue: Arc<tokio::sync::Mutex<JobQueue>>,
     event_bus: Arc<EventBus>,
 }
 
@@ -37,7 +37,7 @@ impl JobManager {
             history,
             results,
             progress,
-            queue: tokio::sync::Mutex::new(JobQueue::new()),
+            queue: Arc::new(tokio::sync::Mutex::new(JobQueue::new())),
             event_bus,
         }
     }
@@ -160,24 +160,85 @@ impl JobManager {
             .update_for_status(&job_id, &JobStatus::Running)
             .await;
 
-        let ack = scheduler
-            .submit(&job_id, &spec)
-            .await
-            .map_err(|e| e.to_string())?;
+        // Run the (potentially long) scheduler work in the background so
+        // POST /v1/jobs returns immediately with a job id.
+        let registry = self.registry.clone();
+        let history = self.history.clone();
+        let results = self.results.clone();
+        let progress = self.progress.clone();
+        let queue = self.queue.clone();
+        let event_bus = self.event_bus.clone();
+        let job_id_bg = job_id.clone();
+        let spec_bg = spec.clone();
+        let scheduler_id_bg = scheduler_id.clone();
 
-        let result = scheduler.result(&job_id).await.map_err(|e| e.to_string())?;
-        self.results.put(result.clone()).await;
-        self.history.finish(&job_id, &result).await;
-        self.progress.complete(&job_id, result.status == JobStatus::Completed).await;
+        tokio::spawn(async move {
+            let outcome = async {
+                let scheduler = registry
+                    .get(&scheduler_id_bg)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                scheduler
+                    .submit(&job_id_bg, &spec_bg)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                scheduler
+                    .result(&job_id_bg)
+                    .await
+                    .map_err(|e| e.to_string())
+            }
+            .await;
 
-        self.queue.lock().await.remove(&job_id);
+            // If the user cancelled while we were running, don't clobber Cancelled.
+            if let Some((job, _, _)) = history.get(&job_id_bg).await {
+                if job.status == JobStatus::Cancelled {
+                    queue.lock().await.remove(&job_id_bg);
+                    return;
+                }
+            }
 
-        self.event_bus.publish(ClusterEvent::JobFinished {
-            job_id: job_id.clone(),
-            success: result.status == JobStatus::Completed,
+            match outcome {
+                Ok(result) => {
+                    results.put(result.clone()).await;
+                    history.finish(&job_id_bg, &result).await;
+                    progress
+                        .complete(&job_id_bg, result.status == JobStatus::Completed)
+                        .await;
+                    queue.lock().await.remove(&job_id_bg);
+                    event_bus.publish(ClusterEvent::JobFinished {
+                        job_id: job_id_bg.clone(),
+                        success: result.status == JobStatus::Completed,
+                    });
+                }
+                Err(e) => {
+                    log::error!("Background job {job_id_bg} failed: {e}");
+                    let failed = JobResult {
+                        job_id: job_id_bg.clone(),
+                        status: JobStatus::Failed,
+                        output: None,
+                        errors: vec![e.clone()],
+                        metrics: JobMetrics::default(),
+                        scheduler_metadata: serde_json::Value::Null,
+                        workers: vec![],
+                        artifacts: vec![],
+                        result_summary: Some(e),
+                    };
+                    results.put(failed.clone()).await;
+                    history.finish(&job_id_bg, &failed).await;
+                    progress.complete(&job_id_bg, false).await;
+                    queue.lock().await.remove(&job_id_bg);
+                    event_bus.publish(ClusterEvent::JobFinished {
+                        job_id: job_id_bg,
+                        success: false,
+                    });
+                }
+            }
         });
 
-        Ok(ack)
+        Ok(SubmitAck {
+            job_id,
+            status: JobStatus::Running,
+        })
     }
 
     async fn append_dependency_log(&self, job_id: &str, report: &DependencyReport) {

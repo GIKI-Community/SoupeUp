@@ -90,8 +90,10 @@ Press <kbd>F5</kbd> in VS Code to launch an Extension Development Host.
 
 ## Notes and limitations
 
-- Job submission currently blocks until completion on the backend, so `Run on
-  Cluster` shows progress and reveals logs/result when the job finishes. Live
-  per-line streaming and remote debugging are planned extension points.
+- Job submission returns a job id immediately; the extension polls until the job
+  finishes. Use the progress notification **Cancel** button (or **Cancel Job**
+  in the Jobs view) to request cancellation. Hard-stopping Dask workers still
+  requires stopping the scheduler in Cluster Runtime when cancel is a no-op on
+  the backend.
 - Project packaging/upload, a `.cluster` GUI editor, and a metrics dashboard are
   intentionally deferred.

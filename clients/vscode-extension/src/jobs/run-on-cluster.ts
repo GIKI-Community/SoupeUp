@@ -10,8 +10,8 @@ import { getSettings, schedulerAliasToPluginId } from "../settings";
 
 /**
  * Save the active Python file and submit its source as a single-file job.
- * The backend `POST /v1/jobs` currently blocks until completion, so we show
- * progress, then surface logs and the result once it resolves.
+ * POST /v1/jobs returns immediately with a job id; we poll until the job
+ * finishes (or the user cancels the progress notification).
  */
 export async function runOnCluster(
   connection: ConnectionService,
@@ -55,20 +55,48 @@ export async function runOnCluster(
     {
       location: vscode.ProgressLocation.Notification,
       title: `Cluster Runtime: running ${fileName}`,
-      cancellable: false,
+      cancellable: true,
     },
-    async () => {
+    async (progress, cancelToken) => {
+      let jobId: string | undefined;
+      const abort = new AbortController();
+      const cancelSub = cancelToken.onCancellationRequested(() => {
+        abort.abort();
+        if (jobId) {
+          void client.jobs.cancel(jobId).catch(() => undefined);
+        }
+      });
+
       try {
+        progress.report({ message: "Submitting…" });
         const ack = await client.jobs.submit(spec, "vscode");
-        const jobId = ack.jobId;
-        output.appendLine(`Job ${jobId} finished with status: ${ack.status}`);
+        jobId = ack.jobId;
+        output.appendLine(`Job ${jobId} accepted (status: ${ack.status}). Waiting…`);
 
-        const [detail, result] = await Promise.all([
-          client.jobs.get(jobId).catch(() => undefined),
-          client.jobs.result(jobId).catch(() => undefined),
-        ]);
+        let lastLogCount = 0;
+        const detail = await client.jobs.wait(jobId, {
+          pollIntervalMs: 1500,
+          signal: abort.signal,
+          onUpdate: (d) => {
+            progress.report({
+              message: `${d.status}${d.progress?.percent ? ` (${Math.round(d.progress.percent)}%)` : ""}`,
+            });
+            if (d.logs?.length > lastLogCount) {
+              for (const line of d.logs.slice(lastLogCount)) {
+                output.appendLine(line);
+              }
+              lastLogCount = d.logs.length;
+            }
+          },
+        });
 
-        if (detail?.logs?.length) {
+        output.appendLine(`Job ${jobId} finished with status: ${detail.status}`);
+
+        const result =
+          detail.result ??
+          (await client.jobs.result(jobId).catch(() => undefined));
+
+        if (detail.logs?.length && lastLogCount === 0) {
           output.appendLine("─── logs ───");
           for (const line of detail.logs) output.appendLine(line);
         }
@@ -81,27 +109,39 @@ export async function runOnCluster(
                 : JSON.stringify(result.output, null, 2),
             );
           }
-          if (result.errors.length) {
+          if (result.errors?.length) {
             output.appendLine("─── errors ───");
             for (const err of result.errors) output.appendLine(err);
           }
+          const ms = result.metrics?.executionTimeMs ?? 0;
+          const workers = result.metrics?.workersUsed ?? 0;
           output.appendLine(
-            `\n✔ ${result.status} in ${result.metrics.executionTimeMs}ms using ${result.metrics.workersUsed} worker(s).`,
+            `\n✔ ${result.status} in ${ms}ms using ${workers} worker(s).`,
           );
         }
 
-        if (ack.status === "completed") {
+        if (detail.status === "completed") {
           notifyJobEvent("completed", `${fileName} completed successfully.`);
           if (getSettings().openDashboardAfterSubmission) {
             void vscode.commands.executeCommand("clusterRuntime.viewDashboard");
           }
+        } else if (detail.status === "cancelled" || cancelToken.isCancellationRequested) {
+          output.appendLine("✖ Job cancelled.");
+          notifyJobEvent("failed", `${fileName} was cancelled.`);
         } else {
-          notifyJobEvent("failed", `${fileName} finished as ${ack.status}.`);
+          notifyJobEvent("failed", `${fileName} finished as ${detail.status}.`);
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        output.appendLine(`✖ Submission failed: ${message}`);
-        notifyJobEvent("failed", `Failed to run ${fileName}: ${message}`);
+        if (cancelToken.isCancellationRequested || /aborted/i.test(message)) {
+          output.appendLine("✖ Cancelled.");
+          notifyJobEvent("failed", `Cancelled ${fileName}.`);
+        } else {
+          output.appendLine(`✖ Submission failed: ${message}`);
+          notifyJobEvent("failed", `Failed to run ${fileName}: ${message}`);
+        }
+      } finally {
+        cancelSub.dispose();
       }
     },
   );

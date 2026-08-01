@@ -104,6 +104,57 @@ export class ClusterClient {
       this.transport.request("POST", `/v1/jobs/${encodeURIComponent(id)}/cancel`),
     retry: (id: string): Promise<SubmitAck> =>
       this.transport.request("POST", `/v1/jobs/${encodeURIComponent(id)}/retry`),
+    /**
+     * Poll until the job reaches a terminal status (completed/failed/cancelled).
+     * Submit itself returns immediately; use this to wait for long-running work.
+     */
+    wait: async (
+      id: string,
+      opts: {
+        pollIntervalMs?: number;
+        /** Overall wait deadline (default: no limit). */
+        timeoutMs?: number;
+        signal?: AbortSignal;
+        onUpdate?: (detail: JobDetail) => void;
+      } = {},
+    ): Promise<JobDetail> => {
+      const pollIntervalMs = opts.pollIntervalMs ?? 1500;
+      const deadline =
+        opts.timeoutMs !== undefined ? Date.now() + opts.timeoutMs : Number.POSITIVE_INFINITY;
+      const terminal = new Set(["completed", "failed", "cancelled"]);
+
+      for (;;) {
+        if (opts.signal?.aborted) {
+          throw new ClusterError("Wait for job aborted");
+        }
+        if (Date.now() > deadline) {
+          throw new ClusterError(
+            `Timed out waiting for job ${id} after ${opts.timeoutMs}ms`,
+          );
+        }
+
+        const detail = await this.jobs.get(id);
+        opts.onUpdate?.(detail);
+        if (terminal.has(detail.status)) {
+          return detail;
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, pollIntervalMs);
+          const onAbort = () => {
+            clearTimeout(timer);
+            reject(new ClusterError("Wait for job aborted"));
+          };
+          if (opts.signal) {
+            if (opts.signal.aborted) {
+              onAbort();
+              return;
+            }
+            opts.signal.addEventListener("abort", onAbort, { once: true });
+          }
+        });
+      }
+    },
   };
 
   readonly logs = {

@@ -58,7 +58,11 @@ export class ConnectionService implements vscode.Disposable {
     this.setState("connecting");
 
     try {
-      const client = await ClusterClient.connect();
+      const client = await ClusterClient.connect({
+        // Submit returns quickly; polls are short. Keep headroom for
+        // dependency install during submit and slow GETs.
+        timeoutMs: 120_000,
+      });
       await client.health();
       this.client = client;
       this.setState("connected");
