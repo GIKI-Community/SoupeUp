@@ -52,8 +52,12 @@ export class ConnectionService implements vscode.Disposable {
   /**
    * Attempt to discover and connect. When `silent`, failures do not raise a
    * notification (used for background auto-connect attempts).
+   * Pass `force` to drop any existing session and reconnect from scratch.
    */
-  async connect(silent = false): Promise<boolean> {
+  async connect(silent = false, force = false): Promise<boolean> {
+    if (force) {
+      this.disconnect();
+    }
     if (this._state === "connecting") return false;
     this.setState("connecting");
 
@@ -84,6 +88,11 @@ export class ConnectionService implements vscode.Disposable {
       }
       return false;
     }
+  }
+
+  /** Drop the current session and re-discover the desktop/server endpoint. */
+  async reconnect(): Promise<boolean> {
+    return this.connect(false, true);
   }
 
   disconnect(): void {

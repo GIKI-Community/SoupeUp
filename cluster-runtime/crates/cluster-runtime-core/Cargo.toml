@@ -49,3 +49,6 @@ libp2p = { version = "0.54", features = [
   "macros",
   "dns",
 ] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

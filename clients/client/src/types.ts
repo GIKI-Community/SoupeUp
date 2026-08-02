@@ -49,6 +49,44 @@ export interface DependencyReport {
   skippedStdlib: string[];
 }
 
+export type ModuleProbeStatus = "stdlib" | "present" | "missing" | "unknown";
+
+export interface ModuleProbeEntry {
+  importName: string;
+  pipName: string;
+  status: ModuleProbeStatus;
+}
+
+export interface EnvProbeLocation {
+  location: string;
+  present: string[];
+  missing: string[];
+  skippedStdlib: string[];
+}
+
+export interface DepsProbeResult {
+  imports: string[];
+  modules: ModuleProbeEntry[];
+  head: EnvProbeLocation;
+  workers: EnvProbeLocation[];
+  missingAnywhere: string[];
+  missingPipPackages: string[];
+  allReady: boolean;
+  note: string;
+}
+
+export interface PackageInfo {
+  name: string;
+  version: string;
+  location?: string;
+}
+
+export interface InstallPackagesResult {
+  installed: string[];
+  workers: Array<{ location: string; ok: boolean; error?: string }>;
+  note: string;
+}
+
 export interface JobProgress {
   percent: number;
   activeTasks: number;

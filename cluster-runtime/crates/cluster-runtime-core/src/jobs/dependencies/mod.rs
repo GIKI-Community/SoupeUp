@@ -7,7 +7,7 @@ use crate::jobs::models::{DependencyReport, EntryPoint, JobSpec};
 use crate::python_runtime::PythonExecutionService;
 
 /// Map common import names to their PyPI package names.
-fn import_to_pip_name(import_name: &str) -> &str {
+pub fn import_to_pip_name(import_name: &str) -> &str {
     match import_name {
         "cv2" => "opencv-python",
         "PIL" => "Pillow",
@@ -112,18 +112,19 @@ fn source_from_spec(spec: &JobSpec) -> Option<&str> {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct ProbeResult {
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeResult {
     #[serde(default)]
-    missing: Vec<String>,
+    pub missing: Vec<String>,
     #[serde(default)]
-    present: Vec<String>,
+    pub present: Vec<String>,
     #[serde(default)]
-    skipped: Vec<String>,
+    pub skipped: Vec<String>,
 }
 
 /// Probe the active venv: classify candidate import names as stdlib / present / missing.
-async fn probe_modules(
+pub async fn probe_modules(
     python: &PythonExecutionService,
     candidates: &[String],
 ) -> Result<ProbeResult, String> {
@@ -292,6 +293,240 @@ pub async fn resolve_and_install(
         already_present,
         skipped_stdlib: probe.skipped,
     })
+}
+
+/// Parse source and probe the head/local Python environment (no install).
+pub async fn probe_source(
+    python: &PythonExecutionService,
+    source: &str,
+) -> Result<(Vec<String>, ProbeResult), String> {
+    let detected = parse_imports(source);
+    let probe = probe_modules(python, &detected).await?;
+    Ok((detected, probe))
+}
+
+/// Install explicit pip package names into the active venv.
+pub async fn install_packages(
+    python: &PythonExecutionService,
+    packages: &[String],
+) -> Result<Vec<String>, String> {
+    let mut installed = Vec::new();
+    for raw in packages {
+        let pip_name = raw.trim();
+        if pip_name.is_empty() {
+            continue;
+        }
+        log::info!("Dependencies API: installing '{pip_name}'");
+        python
+            .install_package(pip_name, None)
+            .await
+            .map_err(|e| format!("Failed to install `{pip_name}`: {e}"))?;
+        installed.push(pip_name.to_string());
+    }
+    Ok(installed)
+}
+
+/// Map missing imports to pip names (deduped).
+pub fn missing_imports_to_pip(missing_imports: &[String]) -> Vec<String> {
+    let mut set = BTreeSet::new();
+    for name in missing_imports {
+        set.insert(import_to_pip_name(name).to_string());
+    }
+    set.into_iter().collect()
+}
+
+/// Probe imports on every Dask worker via `Client.run` (plus head via local probe).
+pub async fn probe_dask_workers(
+    python: &PythonExecutionService,
+    scheduler_address: &str,
+    modules: &[String],
+) -> Result<HashMap<String, ProbeResult>, String> {
+    if modules.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let modules_json = serde_json::to_string(modules).map_err(|e| e.to_string())?;
+    let code = format!(
+        r#"
+import json
+import sys
+import importlib.util
+from distributed import Client
+
+ADDRESS = {scheduler_address:?}
+MODULES = json.loads({modules_json:?})
+
+def _check():
+    stdlib = set(getattr(sys, "stdlib_module_names", ())) | set(sys.builtin_module_names)
+    missing, present, skipped = [], [], []
+    for name in MODULES:
+        if name in stdlib:
+            skipped.append(name)
+            continue
+        try:
+            spec = importlib.util.find_spec(name)
+        except (ImportError, ModuleNotFoundError, ValueError, AttributeError):
+            spec = None
+        if spec is None:
+            missing.append(name)
+        else:
+            present.append(name)
+    return {{"missing": missing, "present": present, "skipped": skipped}}
+
+try:
+    with Client(ADDRESS, timeout="15s") as client:
+        by_worker = client.run(_check)
+    out = {{addr: result for addr, result in by_worker.items()}}
+    print(json.dumps({{"ok": True, "workers": out}}), flush=True)
+except Exception as exc:
+    print(json.dumps({{"ok": False, "error": str(exc)}}), flush=True)
+    sys.exit(1)
+"#,
+        scheduler_address = scheduler_address,
+        modules_json = modules_json,
+    );
+
+    let result = python
+        .execute_code(
+            &code,
+            Some(crate::python_runtime::ExecutionContext {
+                timeout_secs: Some(120),
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|e| format!("Worker dependency probe failed: {e}"))?;
+
+    if !result.success {
+        return Err(format!(
+            "Worker dependency probe failed: {}",
+            result
+                .exception
+                .or_else(|| Some(result.stderr.clone()))
+                .unwrap_or_else(|| "unknown error".into())
+        ));
+    }
+
+    let stdout = result.stdout.trim();
+    let json_line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim().starts_with('{'))
+        .unwrap_or(stdout);
+    let payload: serde_json::Value = serde_json::from_str(json_line)
+        .map_err(|e| format!("Failed to parse worker probe JSON: {e}"))?;
+    if payload.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("worker probe failed");
+        return Err(err.to_string());
+    }
+
+    let mut map = HashMap::new();
+    if let Some(workers) = payload.get("workers").and_then(|v| v.as_object()) {
+        for (addr, val) in workers {
+            let probe: ProbeResult = serde_json::from_value(val.clone())
+                .map_err(|e| format!("Bad worker probe for {addr}: {e}"))?;
+            map.insert(addr.clone(), probe);
+        }
+    }
+    Ok(map)
+}
+
+/// Best-effort: `pip install` the given packages on every Dask worker.
+pub async fn install_on_dask_workers(
+    python: &PythonExecutionService,
+    scheduler_address: &str,
+    packages: &[String],
+) -> Result<HashMap<String, Result<(), String>>, String> {
+    if packages.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let pkgs_json = serde_json::to_string(packages).map_err(|e| e.to_string())?;
+    let code = format!(
+        r#"
+import json
+import subprocess
+import sys
+from distributed import Client
+
+ADDRESS = {scheduler_address:?}
+PACKAGES = json.loads({pkgs_json:?})
+
+def _install():
+    cmd = [sys.executable, "-m", "pip", "install", *PACKAGES]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        err = (proc.stderr or proc.stdout or "pip failed")[-2000:]
+        return {{"ok": False, "error": err}}
+    return {{"ok": True}}
+
+try:
+    with Client(ADDRESS, timeout="15s") as client:
+        by_worker = client.run(_install)
+    print(json.dumps({{"ok": True, "workers": by_worker}}), flush=True)
+except Exception as exc:
+    print(json.dumps({{"ok": False, "error": str(exc)}}), flush=True)
+    sys.exit(1)
+"#,
+        scheduler_address = scheduler_address,
+        pkgs_json = pkgs_json,
+    );
+
+    let result = python
+        .execute_code(
+            &code,
+            Some(crate::python_runtime::ExecutionContext {
+                timeout_secs: Some(600),
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|e| format!("Worker package install failed: {e}"))?;
+
+    if !result.success {
+        return Err(format!(
+            "Worker package install failed: {}",
+            result
+                .exception
+                .or_else(|| Some(result.stderr.clone()))
+                .unwrap_or_else(|| "unknown error".into())
+        ));
+    }
+
+    let stdout = result.stdout.trim();
+    let json_line = stdout
+        .lines()
+        .rev()
+        .find(|l| l.trim().starts_with('{'))
+        .unwrap_or(stdout);
+    let payload: serde_json::Value = serde_json::from_str(json_line)
+        .map_err(|e| format!("Failed to parse worker install JSON: {e}"))?;
+    if payload.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+        let err = payload
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("worker install failed");
+        return Err(err.to_string());
+    }
+
+    let mut map = HashMap::new();
+    if let Some(workers) = payload.get("workers").and_then(|v| v.as_object()) {
+        for (addr, val) in workers {
+            let ok = val.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+            if ok {
+                map.insert(addr.clone(), Ok(()));
+            } else {
+                let err = val
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("install failed")
+                    .to_string();
+                map.insert(addr.clone(), Err(err));
+            }
+        }
+    }
+    Ok(map)
 }
 
 #[cfg(test)]

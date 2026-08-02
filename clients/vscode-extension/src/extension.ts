@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import { registerCommands, type TreeProviders } from "./commands";
+import { ImportsTreeProvider } from "./explorer/imports";
 import {
   ClusterTreeProvider,
   JobsTreeProvider,
@@ -19,20 +20,42 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(connection);
 
   const cluster = new ClusterTreeProvider(connection);
+  const imports = new ImportsTreeProvider(connection);
   const jobs = new JobsTreeProvider(connection);
   const workers = new WorkersTreeProvider(connection);
   const schedulers = new SchedulersTreeProvider(connection);
   const logs = new LogsTreeProvider(connection);
 
   context.subscriptions.push(
-    vscode.window.createTreeView("clusterRuntime.cluster", { treeDataProvider: cluster }),
-    vscode.window.createTreeView("clusterRuntime.jobs", { treeDataProvider: jobs }),
-    vscode.window.createTreeView("clusterRuntime.workers", { treeDataProvider: workers }),
-    vscode.window.createTreeView("clusterRuntime.schedulers", { treeDataProvider: schedulers }),
-    vscode.window.createTreeView("clusterRuntime.logs", { treeDataProvider: logs }),
+    imports,
+    vscode.window.createTreeView("clusterRuntime.cluster", {
+      treeDataProvider: cluster,
+    }),
+    vscode.window.createTreeView("clusterRuntime.imports", {
+      treeDataProvider: imports,
+    }),
+    vscode.window.createTreeView("clusterRuntime.jobs", {
+      treeDataProvider: jobs,
+    }),
+    vscode.window.createTreeView("clusterRuntime.workers", {
+      treeDataProvider: workers,
+    }),
+    vscode.window.createTreeView("clusterRuntime.schedulers", {
+      treeDataProvider: schedulers,
+    }),
+    vscode.window.createTreeView("clusterRuntime.logs", {
+      treeDataProvider: logs,
+    }),
   );
 
-  const providers: TreeProviders = { cluster, jobs, workers, schedulers, logs };
+  const providers: TreeProviders = {
+    cluster,
+    imports,
+    jobs,
+    workers,
+    schedulers,
+    logs,
+  };
   registerCommands(context, connection, output, providers);
 
   context.subscriptions.push(new ClusterStatusBar(connection));

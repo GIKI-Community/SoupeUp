@@ -19,6 +19,9 @@ import type {
   StreamEvent,
   SubmitAck,
   SystemOverview,
+  DepsProbeResult,
+  InstallPackagesResult,
+  PackageInfo,
 } from "./types";
 
 export interface ConnectOptions {
@@ -159,6 +162,22 @@ export class ClusterClient {
 
   readonly logs = {
     list: (): Promise<LogEntry[]> => this.transport.request("GET", "/v1/logs"),
+  };
+
+  readonly python = {
+    listPackages: (): Promise<{ packages: PackageInfo[] }> =>
+      this.transport.request("GET", "/v1/python/packages"),
+    probe: (body: {
+      source?: string;
+      modules?: string[];
+      checkWorkers?: boolean;
+    }): Promise<DepsProbeResult> =>
+      this.transport.request("POST", "/v1/python/probe", body),
+    installPackages: (body: {
+      packages: string[];
+      installOnWorkers?: boolean;
+    }): Promise<InstallPackagesResult> =>
+      this.transport.request("POST", "/v1/python/packages/install", body),
   };
 
   /** Subscribe to the live event stream. Returns a handle to unsubscribe. */

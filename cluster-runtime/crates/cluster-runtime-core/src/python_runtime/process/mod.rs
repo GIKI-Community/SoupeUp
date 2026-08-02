@@ -124,12 +124,21 @@ impl BackgroundProcessManager {
         cmd.stdin(std::process::Stdio::null());
         cmd.kill_on_drop(true);
 
-        // Put the child in its own process group so Ray/Dask signal storms
-        // (e.g. killpg on failure) cannot SIGTERM the Cluster Runtime parent.
+        // New session + process group so Ray/Dask cleanup (killpg) cannot
+        // SIGTERM the Cluster Runtime parent process.
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
-            cmd.process_group(0);
+            unsafe {
+                cmd.pre_exec(|| {
+                    // setsid() makes this process a session leader (new PGID).
+                    if libc::setsid() == -1 {
+                        // Fall back: still try to isolate via setpgid.
+                        let _ = libc::setpgid(0, 0);
+                    }
+                    Ok(())
+                });
+            }
         }
 
         #[cfg(windows)]
@@ -390,19 +399,46 @@ fn kill_process_tree(pid: Option<u32>) {
             .status();
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        // Kill the process group when possible.
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &format!("-{}", pid)])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        // Only kill a process *group* if `pid` is the group leader (our children
+        // are spawned with setsid/setpgid). Blindly doing `kill -TERM -<pid>`
+        // when pid is NOT a leader can hit the wrong group — or, on some
+        // systems, escalate badly. Prefer targeted kills otherwise.
+        let is_group_leader = unsafe {
+            let pgid = libc::getpgid(pid as i32);
+            pgid >= 0 && pgid == pid as i32
+        };
+
+        if is_group_leader {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        } else {
+            // Kill direct children, then the process itself.
+            let _ = std::process::Command::new("pkill")
+                .args(["-TERM", "-P", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
     }
 }
 

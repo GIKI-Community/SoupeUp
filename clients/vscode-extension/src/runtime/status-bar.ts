@@ -41,8 +41,9 @@ export class ClusterStatusBar implements vscode.Disposable {
     const workers = ov?.workerCount ?? 0;
     const health = ov?.schedulerRunning ? "$(cluster)" : "$(debug-pause)";
     this.item.text = `${health} Cluster: ${scheduler} | ${workers} worker${workers === 1 ? "" : "s"}`;
-    this.item.tooltip = `Cluster Runtime connected · scheduler ${scheduler} · ${workers} workers`;
-    this.item.command = "clusterRuntime.focusView";
+    this.item.tooltip =
+      `Connected · ${scheduler} · ${workers} worker(s). Click to reconnect.`;
+    this.item.command = "clusterRuntime.reconnect";
     this.item.backgroundColor = undefined;
   }
 

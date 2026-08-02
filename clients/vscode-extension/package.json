@@ -33,6 +33,7 @@
     "views": {
       "clusterRuntime": [
         { "id": "clusterRuntime.cluster", "name": "Cluster" },
+        { "id": "clusterRuntime.imports", "name": "Imports" },
         { "id": "clusterRuntime.jobs", "name": "Jobs" },
         { "id": "clusterRuntime.workers", "name": "Workers" },
         { "id": "clusterRuntime.schedulers", "name": "Schedulers" },
@@ -41,6 +42,7 @@
     },
     "commands": [
       { "command": "clusterRuntime.connect", "title": "Cluster Runtime: Connect", "icon": "$(plug)" },
+      { "command": "clusterRuntime.reconnect", "title": "Cluster Runtime: Reconnect", "icon": "$(debug-restart)" },
       { "command": "clusterRuntime.disconnect", "title": "Cluster Runtime: Disconnect", "icon": "$(debug-disconnect)" },
       { "command": "clusterRuntime.runOnCluster", "title": "Cluster Runtime: Run on Cluster", "icon": "$(play)" },
       { "command": "clusterRuntime.cancelJob", "title": "Cluster Runtime: Cancel Job", "icon": "$(stop-circle)" },
@@ -50,7 +52,9 @@
       { "command": "clusterRuntime.openDesktop", "title": "Cluster Runtime: Open Desktop App", "icon": "$(window)" },
       { "command": "clusterRuntime.refresh", "title": "Cluster Runtime: Refresh Cluster", "icon": "$(refresh)" },
       { "command": "clusterRuntime.selectScheduler", "title": "Cluster Runtime: Select Scheduler", "icon": "$(list-selection)" },
-      { "command": "clusterRuntime.initializeProject", "title": "Cluster Runtime: Initialize Project", "icon": "$(new-file)" }
+      { "command": "clusterRuntime.initializeProject", "title": "Cluster Runtime: Initialize Project", "icon": "$(new-file)" },
+      { "command": "clusterRuntime.checkImports", "title": "Cluster Runtime: Check Imports on Cluster", "icon": "$(search)" },
+      { "command": "clusterRuntime.installMissingPackages", "title": "Cluster Runtime: Install Missing Packages", "icon": "$(cloud-download)" }
     ],
     "menus": {
       "editor/title/run": [
@@ -62,7 +66,10 @@
       ],
       "view/title": [
         { "command": "clusterRuntime.refresh", "when": "view == clusterRuntime.cluster", "group": "navigation" },
-        { "command": "clusterRuntime.selectScheduler", "when": "view == clusterRuntime.schedulers", "group": "navigation" }
+        { "command": "clusterRuntime.reconnect", "when": "view == clusterRuntime.cluster", "group": "navigation" },
+        { "command": "clusterRuntime.selectScheduler", "when": "view == clusterRuntime.schedulers", "group": "navigation" },
+        { "command": "clusterRuntime.checkImports", "when": "view == clusterRuntime.imports", "group": "navigation" },
+        { "command": "clusterRuntime.installMissingPackages", "when": "view == clusterRuntime.imports", "group": "navigation" }
       ],
       "view/item/context": [
         { "command": "clusterRuntime.cancelJob", "when": "view == clusterRuntime.jobs && viewItem == job-running", "group": "inline" },

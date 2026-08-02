@@ -11,6 +11,12 @@ import { DASK_PLUGIN_ID } from "../settings";
 
 export interface TreeProviders {
   cluster: { refresh(): void };
+  imports: {
+    refresh(): void;
+    setProbeResult(result: import("@cluster-runtime/client").DepsProbeResult | undefined): void;
+    getProbeResult(): import("@cluster-runtime/client").DepsProbeResult | undefined;
+    getActivePythonSource(): { fileName: string; source: string } | undefined;
+  };
   jobs: { refresh(): void };
   workers: { refresh(): void };
   schedulers: { refresh(): void };
@@ -63,12 +69,148 @@ export function registerCommands(
     refreshAll();
   });
 
+  register("clusterRuntime.reconnect", async () => {
+    const ok = await connection.reconnect();
+    refreshAll();
+    if (ok) {
+      void vscode.window.showInformationMessage(
+        "Reconnected to Cluster Runtime.",
+      );
+    }
+  });
+
   register("clusterRuntime.disconnect", () => {
     connection.disconnect();
     refreshAll();
   });
 
   register("clusterRuntime.runOnCluster", () => runOnCluster(connection, output));
+
+  register("clusterRuntime.checkImports", async () => {
+    if (!connection.isConnected()) {
+      const ok = await connection.connect();
+      if (!ok) return;
+    }
+    const active = providers.imports.getActivePythonSource();
+    if (!active) {
+      void vscode.window.showErrorMessage("Open a Python file to check imports.");
+      return;
+    }
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Checking imports on cluster…",
+        cancellable: false,
+      },
+      async () => {
+        try {
+          const client = connection.requireClient();
+          const result = await client.python.probe({
+            source: active.source,
+            checkWorkers: true,
+          });
+          providers.imports.setProbeResult(result);
+          output.show(true);
+          output.appendLine(`\n─── import check: ${active.fileName} ───`);
+          output.appendLine(result.note);
+          output.appendLine(
+            `allReady=${result.allReady} missing=${result.missingAnywhere.join(", ") || "(none)"}`,
+          );
+          for (const w of result.workers ?? []) {
+            output.appendLine(
+              `  worker ${w.location}: missing=[${(w.missing ?? []).join(", ")}]`,
+            );
+          }
+          if (result.allReady) {
+            void vscode.window.showInformationMessage(
+              `All imports available for ${active.fileName}.`,
+            );
+          } else {
+            const pick = await vscode.window.showWarningMessage(
+              `Missing on cluster: ${result.missingPipPackages.join(", ") || result.missingAnywhere.join(", ")}`,
+              "Install missing",
+            );
+            if (pick === "Install missing") {
+              await vscode.commands.executeCommand(
+                "clusterRuntime.installMissingPackages",
+              );
+            }
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          output.appendLine(`✖ Import check failed: ${message}`);
+          void vscode.window.showErrorMessage(`Import check failed: ${message}`);
+        }
+      },
+    );
+  });
+
+  register("clusterRuntime.installMissingPackages", async () => {
+    if (!connection.isConnected()) {
+      const ok = await connection.connect();
+      if (!ok) return;
+    }
+    const active = providers.imports.getActivePythonSource();
+    if (!active) {
+      void vscode.window.showErrorMessage("Open a Python file first.");
+      return;
+    }
+    const client = connection.requireClient();
+    let probe = providers.imports.getProbeResult();
+    if (!probe) {
+      probe = await client.python.probe({
+        source: active.source,
+        checkWorkers: true,
+      });
+      providers.imports.setProbeResult(probe);
+    }
+    const packages = probe.missingPipPackages?.length
+      ? probe.missingPipPackages
+      : [];
+    if (packages.length === 0) {
+      void vscode.window.showInformationMessage("Nothing to install — all imports look present.");
+      return;
+    }
+
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `Installing ${packages.length} package(s)…`,
+        cancellable: false,
+      },
+      async () => {
+        try {
+          const result = await client.python.installPackages({
+            packages,
+            installOnWorkers: true,
+          });
+          output.show(true);
+          output.appendLine(`\n─── install packages ───`);
+          output.appendLine(result.note);
+          output.appendLine(`installed: ${result.installed.join(", ")}`);
+          for (const w of result.workers ?? []) {
+            output.appendLine(
+              `  worker ${w.location}: ${w.ok ? "ok" : `failed: ${w.error}`}`,
+            );
+          }
+          // Re-probe after install.
+          const again = await client.python.probe({
+            source: active.source,
+            checkWorkers: true,
+          });
+          providers.imports.setProbeResult(again);
+          void vscode.window.showInformationMessage(
+            again.allReady
+              ? "Packages installed — cluster is ready."
+              : `Installed, but still missing: ${again.missingAnywhere.join(", ")}`,
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          void vscode.window.showErrorMessage(`Install failed: ${message}`);
+        }
+      },
+    );
+  });
 
   register("clusterRuntime.cancelJob", async (arg?: JobTreeItem | string) => {
     const jobId = await resolveJobId(arg);

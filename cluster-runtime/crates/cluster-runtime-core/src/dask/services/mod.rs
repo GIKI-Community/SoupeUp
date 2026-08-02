@@ -182,6 +182,20 @@ impl DaskService {
         self.client.connect(address).await
     }
 
+    /// Scheduler address the client would use (connected address or settings).
+    pub async fn client_address(&self) -> Option<String> {
+        if let Some(addr) = self.client.address().await {
+            return Some(addr);
+        }
+        let settings = self.settings.read().await;
+        let addr = settings.scheduler_address.trim();
+        if addr.is_empty() {
+            None
+        } else {
+            Some(addr.to_string())
+        }
+    }
+
     pub async fn disconnect_client(&self) -> DaskResult<()> {
         self.client.disconnect().await
     }

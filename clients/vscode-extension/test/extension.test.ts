@@ -5,6 +5,7 @@ const EXTENSION_ID = "cluster-runtime.cluster-runtime-vscode";
 
 const EXPECTED_COMMANDS = [
   "clusterRuntime.connect",
+  "clusterRuntime.reconnect",
   "clusterRuntime.disconnect",
   "clusterRuntime.runOnCluster",
   "clusterRuntime.cancelJob",

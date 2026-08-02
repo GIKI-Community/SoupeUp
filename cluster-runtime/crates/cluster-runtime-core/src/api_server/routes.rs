@@ -10,6 +10,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 use super::{auth, ws, ApiContext};
 use crate::jobs::JobSpec;
@@ -61,6 +62,9 @@ pub fn router(ctx: ApiContext) -> Router {
         .route("/logs", get(get_logs))
         .route("/events", get(ws::events))
         .route("/peers", get(list_peers).post(connect_peer))
+        .route("/python/packages", get(list_python_packages))
+        .route("/python/probe", post(probe_python_deps))
+        .route("/python/packages/install", post(install_python_packages))
         .route_layer(middleware::from_fn_with_state(ctx.clone(), auth::require_token));
 
     Router::new()
@@ -292,6 +296,216 @@ async fn connect_peer(
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(json!({ "connected": body.multiaddr })))
+}
+
+async fn require_python(
+    ctx: &ApiContext,
+) -> Result<std::sync::Arc<crate::python_runtime::PythonExecutionService>, ApiError> {
+    ctx.python_service
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Python runtime is not ready",
+            )
+        })
+}
+
+async fn list_python_packages(State(ctx): State<ApiContext>) -> ApiResult<Value> {
+    let python = require_python(&ctx).await?;
+    let packages = python
+        .list_packages()
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(json!({ "packages": packages })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeBody {
+    /// Full Python source to scan for imports.
+    #[serde(default)]
+    source: Option<String>,
+    /// Explicit import names (used if source is empty).
+    #[serde(default)]
+    modules: Option<Vec<String>>,
+    /// When true, also probe connected Dask workers via Client.run.
+    #[serde(default)]
+    check_workers: bool,
+}
+
+async fn probe_python_deps(
+    State(ctx): State<ApiContext>,
+    Json(body): Json<ProbeBody>,
+) -> ApiResult<Value> {
+    use crate::jobs::dependencies as deps;
+
+    let python = require_python(&ctx).await?;
+
+    let detected = if let Some(src) = body.source.as_deref().filter(|s| !s.trim().is_empty()) {
+        deps::parse_imports(src)
+    } else {
+        body.modules.unwrap_or_default()
+    };
+
+    let head_probe = deps::probe_modules(&python, &detected)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let modules: Vec<Value> = detected
+        .iter()
+        .map(|name| {
+            let pip = deps::import_to_pip_name(name);
+            let status = if head_probe.skipped.iter().any(|s| s == name) {
+                "stdlib"
+            } else if head_probe.present.iter().any(|s| s == name) {
+                "present"
+            } else if head_probe.missing.iter().any(|s| s == name) {
+                "missing"
+            } else {
+                "unknown"
+            };
+            json!({
+                "importName": name,
+                "pipName": pip,
+                "status": status,
+            })
+        })
+        .collect();
+
+    let mut workers_json = Vec::new();
+    let mut note = "Probed the Cluster Runtime Python environment (shared by local workers)."
+        .to_string();
+
+    if body.check_workers {
+        if let Some(dask) = ctx.dask_service.read().await.clone() {
+            if let Some(addr) = dask.client_address().await {
+                match deps::probe_dask_workers(&python, &addr, &detected).await {
+                    Ok(map) => {
+                        note = format!(
+                            "Probed head Python env and {} Dask worker(s).",
+                            map.len()
+                        );
+                        for (worker_addr, probe) in map {
+                            workers_json.push(json!({
+                                "location": worker_addr,
+                                "present": probe.present,
+                                "missing": probe.missing,
+                                "skippedStdlib": probe.skipped,
+                            }));
+                        }
+                    }
+                    Err(e) => {
+                        note = format!(
+                            "Head env probed; Dask worker probe failed: {e}. \
+                             Install on head still helps local shared-venv workers."
+                        );
+                    }
+                }
+            } else {
+                note.push_str(" No Dask scheduler address available for worker probe.");
+            }
+        } else {
+            note.push_str(" Dask service not loaded — worker probe skipped.");
+        }
+    }
+
+    let mut missing_anywhere: BTreeSet<String> = head_probe.missing.iter().cloned().collect();
+    for w in &workers_json {
+        if let Some(arr) = w.get("missing").and_then(|v| v.as_array()) {
+            for m in arr {
+                if let Some(s) = m.as_str() {
+                    missing_anywhere.insert(s.to_string());
+                }
+            }
+        }
+    }
+
+    let all_ready = missing_anywhere.is_empty();
+    let missing_pip = deps::missing_imports_to_pip(
+        &missing_anywhere.iter().cloned().collect::<Vec<_>>(),
+    );
+
+    Ok(Json(json!({
+        "imports": detected,
+        "modules": modules,
+        "head": {
+            "location": "head",
+            "present": head_probe.present,
+            "missing": head_probe.missing,
+            "skippedStdlib": head_probe.skipped,
+        },
+        "workers": workers_json,
+        "missingAnywhere": missing_anywhere.into_iter().collect::<Vec<_>>(),
+        "missingPipPackages": missing_pip,
+        "allReady": all_ready,
+        "note": note,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstallBody {
+    /// Pip package names to install.
+    packages: Vec<String>,
+    /// When true, also pip-install on connected Dask workers.
+    #[serde(default)]
+    install_on_workers: bool,
+}
+
+async fn install_python_packages(
+    State(ctx): State<ApiContext>,
+    Json(body): Json<InstallBody>,
+) -> ApiResult<Value> {
+    use crate::jobs::dependencies as deps;
+
+    let python = require_python(&ctx).await?;
+
+    let installed_head = deps::install_packages(&python, &body.packages)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let mut workers = Vec::new();
+    let mut note = format!("Installed {} package(s) on head Python env.", installed_head.len());
+
+    if body.install_on_workers {
+        if let Some(dask) = ctx.dask_service.read().await.clone() {
+            if let Some(addr) = dask.client_address().await {
+                match deps::install_on_dask_workers(&python, &addr, &body.packages).await {
+                    Ok(map) => {
+                        for (worker_addr, result) in map {
+                            match result {
+                                Ok(()) => workers.push(json!({
+                                    "location": worker_addr,
+                                    "ok": true,
+                                })),
+                                Err(e) => workers.push(json!({
+                                    "location": worker_addr,
+                                    "ok": false,
+                                    "error": e,
+                                })),
+                            }
+                        }
+                        note = format!(
+                            "{note} Also attempted install on {} Dask worker(s).",
+                            workers.len()
+                        );
+                    }
+                    Err(e) => {
+                        note = format!("{note} Worker install failed: {e}");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "installed": installed_head,
+        "workers": workers,
+        "note": note,
+    })))
 }
 
 #[cfg(test)]
