@@ -27,7 +27,7 @@ pub struct ExecutionResult {
 }
 
 /// Configuration injected into every execution call.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecutionContext {
     /// Directory the Python process will be launched from.
@@ -36,10 +36,23 @@ pub struct ExecutionContext {
     pub env_vars: HashMap<String, String>,
     /// Extra command-line arguments passed after the script/module name.
     pub args: Vec<String>,
-    /// Hard timeout in seconds. None disables the timeout.
+    /// Hard timeout in seconds. `None` waits until the process exits (no cap).
+    /// Default is 60s for short probes; long jobs pass `None` explicitly.
     pub timeout_secs: Option<u64>,
     /// Optional text to send to stdin.
     pub stdin: Option<String>,
+}
+
+impl Default for ExecutionContext {
+    fn default() -> Self {
+        Self {
+            working_directory: None,
+            env_vars: HashMap::new(),
+            args: Vec::new(),
+            timeout_secs: Some(60),
+            stdin: None,
+        }
+    }
 }
 
 // ─── Packages ─────────────────────────────────────────────────────────────────

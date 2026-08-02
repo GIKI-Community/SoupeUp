@@ -113,11 +113,22 @@ impl ClientManager {
         function_body: &str,
         args: serde_json::Value,
     ) -> DaskResult<JobResult> {
+        self.submit_with_timeout(function_body, args, None).await
+    }
+
+    pub async fn submit_with_timeout(
+        &self,
+        function_body: &str,
+        args: serde_json::Value,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let addr = self.require_address().await?;
         let args_json = serde_json::to_string(&args)
             .map_err(|e| DaskError::JsonError(e.to_string()))?;
-        let code = scripts::submit_function_script(&addr, function_body, &args_json);
-        self.run_job_script(&code).await
+        let (result_timeout, process_timeout) = resolve_job_timeouts(timeout_secs);
+        let code =
+            scripts::submit_function_script(&addr, function_body, &args_json, result_timeout);
+        self.run_job_script(&code, process_timeout).await
     }
 
     /// Run distributed orchestration in the client process (`client` + `ARGS` in scope).
@@ -126,11 +137,21 @@ impl ClientManager {
         body: &str,
         args: serde_json::Value,
     ) -> DaskResult<JobResult> {
+        self.orchestrate_with_timeout(body, args, None).await
+    }
+
+    pub async fn orchestrate_with_timeout(
+        &self,
+        body: &str,
+        args: serde_json::Value,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let addr = self.require_address().await?;
         let args_json = serde_json::to_string(&args)
             .map_err(|e| DaskError::JsonError(e.to_string()))?;
+        let (_result_timeout, process_timeout) = resolve_job_timeouts(timeout_secs);
         let code = scripts::orchestration_script(&addr, body, &args_json);
-        self.run_job_script(&code).await
+        self.run_job_script(&code, process_timeout).await
     }
 
     pub async fn map(
@@ -138,11 +159,21 @@ impl ClientManager {
         function_body: &str,
         items: serde_json::Value,
     ) -> DaskResult<JobResult> {
+        self.map_with_timeout(function_body, items, None).await
+    }
+
+    pub async fn map_with_timeout(
+        &self,
+        function_body: &str,
+        items: serde_json::Value,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let addr = self.require_address().await?;
         let items_json = serde_json::to_string(&items)
             .map_err(|e| DaskError::JsonError(e.to_string()))?;
+        let (_result_timeout, process_timeout) = resolve_job_timeouts(timeout_secs);
         let code = scripts::map_script(&addr, function_body, &items_json);
-        self.run_job_script(&code).await
+        self.run_job_script(&code, process_timeout).await
     }
 
     pub async fn scatter(&self, data: serde_json::Value) -> DaskResult<JobResult> {
@@ -171,13 +202,17 @@ def user_fn(item):
         self.disconnect().await
     }
 
-    async fn run_job_script(&self, code: &str) -> DaskResult<JobResult> {
+    async fn run_job_script(
+        &self,
+        code: &str,
+        process_timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let result = self
             .python
             .execute_code(
                 code,
                 Some(ExecutionContext {
-                    timeout_secs: Some(660),
+                    timeout_secs: process_timeout_secs,
                     ..Default::default()
                 }),
             )
@@ -241,6 +276,16 @@ def user_fn(item):
             cpu_utilization: None,
             speedup: None,
         })
+    }
+}
+
+/// Map JobSpec.timeout_secs → (Dask Future.result timeout, Python process timeout).
+/// - `None` or `Some(0)` → no timeout; the job ends when the computation finishes
+/// - `Some(n)` → wait at most n seconds for the future (process gets n+120)
+pub fn resolve_job_timeouts(spec_timeout: Option<u64>) -> (Option<u64>, Option<u64>) {
+    match spec_timeout {
+        None | Some(0) => (None, None),
+        Some(secs) => (Some(secs), Some(secs.saturating_add(120))),
     }
 }
 

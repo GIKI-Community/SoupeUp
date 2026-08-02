@@ -45,6 +45,8 @@ export async function runOnCluster(
     description: `Submitted from VS Code (${fileName})`,
     entryPoint: { type: "pythonScript", script },
     tags: ["vscode"],
+    // 0 = no hard cap; job finishes when the script/cluster work completes.
+    timeoutSecs: 0,
   };
 
   output.show(true);

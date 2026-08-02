@@ -164,15 +164,21 @@ pub async fn run_command_captured(
         format!("Failed to spawn `{}`: {}", program.display(), e)
     ))?;
 
-    let timeout = timeout_secs.unwrap_or(60);
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(timeout),
-        child.wait_with_output(),
-    )
-    .await
-    .map_err(|_| PythonError::Timeout(timeout))?
-    .map_err(|e| PythonError::ExecutionError(e.to_string()))?;
+    // `None` = wait until the process exits (no hard cap). Job runners pass None
+    // for long Dask/Ray work; short probes pass an explicit timeout.
+    let output = match timeout_secs {
+        Some(secs) => tokio::time::timeout(
+            std::time::Duration::from_secs(secs),
+            child.wait_with_output(),
+        )
+        .await
+        .map_err(|_| PythonError::Timeout(secs))?
+        .map_err(|e| PythonError::ExecutionError(e.to_string()))?,
+        None => child
+            .wait_with_output()
+            .await
+            .map_err(|e| PythonError::ExecutionError(e.to_string()))?,
+    };
 
     let execution_time_ms = start.elapsed().as_millis() as u64;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();

@@ -196,19 +196,30 @@ impl DaskService {
         &self,
         function_body: String,
         args: serde_json::Value,
+        timeout_secs: Option<u64>,
     ) -> DaskResult<JobResult> {
         self.ensure_packages().await?;
-        self.jobs.submit_python_function(function_body, args).await
+        self.jobs
+            .submit_python_function(function_body, args, timeout_secs)
+            .await
     }
 
-    pub async fn submit_script(&self, script: String) -> DaskResult<JobResult> {
+    pub async fn submit_script(
+        &self,
+        script: String,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         self.ensure_packages().await?;
-        self.jobs.submit_script(script).await
+        self.jobs.submit_script(script, timeout_secs).await
     }
 
-    pub async fn submit_module(&self, module: String) -> DaskResult<JobResult> {
+    pub async fn submit_module(
+        &self,
+        module: String,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         self.ensure_packages().await?;
-        self.jobs.submit_module(module).await
+        self.jobs.submit_module(module, timeout_secs).await
     }
 
     pub async fn map(

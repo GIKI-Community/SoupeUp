@@ -616,7 +616,8 @@ pub async fn dask_submit_python_function(
     args: serde_json::Value,
 ) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
-    svc.submit_python_function(function_body, args)
+    // None = no hard cap; job ends when the computation finishes.
+    svc.submit_python_function(function_body, args, None)
         .await
         .map_err(|e| e.to_string())
 }
@@ -668,7 +669,9 @@ pub async fn dask_submit_script(
     script: String,
 ) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
-    svc.submit_script(script).await.map_err(|e| e.to_string())
+    svc.submit_script(script, None)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -677,7 +680,9 @@ pub async fn dask_submit_module(
     module: String,
 ) -> Result<cluster_runtime_core::dask::JobResult, String> {
     let svc = dask_service!(state);
-    svc.submit_module(module).await.map_err(|e| e.to_string())
+    svc.submit_module(module, None)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]

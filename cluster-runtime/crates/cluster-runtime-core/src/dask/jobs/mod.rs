@@ -18,11 +18,18 @@ impl JobService {
         &self,
         function_body: String,
         args: serde_json::Value,
+        timeout_secs: Option<u64>,
     ) -> DaskResult<JobResult> {
-        self.client.submit(&function_body, args).await
+        self.client
+            .submit_with_timeout(&function_body, args, timeout_secs)
+            .await
     }
 
-    pub async fn submit_script(&self, script: String) -> DaskResult<JobResult> {
+    pub async fn submit_script(
+        &self,
+        script: String,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let body = format!(
             r#"
 def user_fn(_unused=None):
@@ -33,10 +40,16 @@ def user_fn(_unused=None):
     return ns.get("result")
 "#
         );
-        self.client.submit(&body, serde_json::json!([null])).await
+        self.client
+            .submit_with_timeout(&body, serde_json::json!([null]), timeout_secs)
+            .await
     }
 
-    pub async fn submit_module(&self, module: String) -> DaskResult<JobResult> {
+    pub async fn submit_module(
+        &self,
+        module: String,
+        timeout_secs: Option<u64>,
+    ) -> DaskResult<JobResult> {
         let body = format!(
             r#"
 def user_fn(_unused=None):
@@ -47,7 +60,9 @@ def user_fn(_unused=None):
     return str(mod)
 "#
         );
-        self.client.submit(&body, serde_json::json!([null])).await
+        self.client
+            .submit_with_timeout(&body, serde_json::json!([null]), timeout_secs)
+            .await
     }
 
     pub async fn map(

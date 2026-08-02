@@ -94,19 +94,19 @@ impl DaskSchedulerAdapter {
         let result = match &spec.entry_point {
             EntryPoint::PythonFunction { body } => self
                 .service
-                .submit_python_function(body.clone(), spec.args.clone())
+                .submit_python_function(body.clone(), spec.args.clone(), spec.timeout_secs)
                 .await
                 .map(|r| Self::map_dask_result(job_id, r))
                 .map_err(|e| SchedulerError::JobError(e.to_string())),
             EntryPoint::PythonScript { script } => self
                 .service
-                .submit_script(script.clone())
+                .submit_script(script.clone(), spec.timeout_secs)
                 .await
                 .map(|r| Self::map_dask_result(job_id, r))
                 .map_err(|e| SchedulerError::JobError(e.to_string())),
             EntryPoint::PythonModule { module } => self
                 .service
-                .submit_module(module.clone())
+                .submit_module(module.clone(), spec.timeout_secs)
                 .await
                 .map(|r| Self::map_dask_result(job_id, r))
                 .map_err(|e| SchedulerError::JobError(e.to_string())),

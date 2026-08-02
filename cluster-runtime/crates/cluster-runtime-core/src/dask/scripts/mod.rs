@@ -215,7 +215,17 @@ except Exception as exc:
 }
 
 /// Submit an arbitrary Python function body as a Dask future.
-pub fn submit_function_script(scheduler_address: &str, function_body: &str, args_json: &str) -> String {
+/// `result_timeout_secs`: `None` waits indefinitely; otherwise passed to `Future.result`.
+pub fn submit_function_script(
+    scheduler_address: &str,
+    function_body: &str,
+    args_json: &str,
+    result_timeout_secs: Option<u64>,
+) -> String {
+    let timeout_expr = match result_timeout_secs {
+        Some(secs) => secs.to_string(),
+        None => "None".to_string(),
+    };
     format!(
         r#"
 import json
@@ -225,6 +235,7 @@ from distributed import Client
 
 ADDRESS = {scheduler_address:?}
 ARGS = json.loads({args_json:?})
+RESULT_TIMEOUT = {timeout_expr}
 
 {function_body}
 
@@ -237,7 +248,7 @@ try:
                 "No Dask workers connected. Start at least one worker on the Cluster page."
             )
         fut = client.submit(user_fn, *ARGS)
-        result = fut.result(timeout=600)
+        result = fut.result(timeout=RESULT_TIMEOUT)
         elapsed_ms = int((time.time() - started) * 1000)
         print(json.dumps({{
             "ok": True,
@@ -252,6 +263,7 @@ except Exception as exc:
         scheduler_address = scheduler_address,
         args_json = args_json,
         function_body = function_body,
+        timeout_expr = timeout_expr,
     )
 }
 
