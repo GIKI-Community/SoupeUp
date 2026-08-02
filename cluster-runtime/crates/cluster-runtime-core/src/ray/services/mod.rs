@@ -109,8 +109,9 @@ impl RayService {
         if cfg!(windows) && major_minor.as_str() >= "3.13" {
             Some(format!(
                 "Ray is not installable on Windows with Python {version}. \
-                 Re-stage the bundled runtime: \
-                 `scripts/Setup-PythonRuntime.ps1 -Force`, then restart Cluster Runtime."
+                 Use Python 3.10–3.12 (set CLUSTER_RUNTIME_PYTHON), or delete the \
+                 managed install under the data dir and restart so a 3.10 standalone \
+                 can be downloaded."
             ))
         } else {
             None

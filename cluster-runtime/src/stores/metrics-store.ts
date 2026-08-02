@@ -67,10 +67,10 @@ export const useMetricsStore = create<MetricsState>((set, get) => ({
     if (!snapshot) return;
 
     const dask = useDaskStore.getState().metrics;
-    const lastCpu = snapshot.cpu.points.at(-1)?.value ?? 0;
-    const lastMem = snapshot.memory.points.at(-1)?.value ?? 0;
-    const lastNet = snapshot.network.points.at(-1)?.value ?? 0;
-    const lastDisk = snapshot.disk.points.at(-1)?.value ?? 0;
+    const lastCpu = snapshot.cpu.points[snapshot.cpu.points.length - 1]?.value ?? 0;
+    const lastMem = snapshot.memory.points[snapshot.memory.points.length - 1]?.value ?? 0;
+    const lastNet = snapshot.network.points[snapshot.network.points.length - 1]?.value ?? 0;
+    const lastDisk = snapshot.disk.points[snapshot.disk.points.length - 1]?.value ?? 0;
 
     const cpuVal = nextValue(snapshot.cpu.points, dask?.workerCpu, lastCpu, 6);
     const memVal = nextValue(snapshot.memory.points, dask?.workerMemory, lastMem, 4);

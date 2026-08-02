@@ -409,14 +409,83 @@ pub async fn python_runtime_health(
     let lock = state.python_service.read().await;
     match lock.as_ref() {
         Some(svc) => svc.runtime_health().await.map_err(|e| e.to_string()),
-        None => Ok(PythonRuntimeHealth {
-            status: cluster_runtime_core::python_runtime::types::RuntimeStatus::Initializing,
-            python_version: None,
-            active_environment: None,
-            environment_path: None,
-            interpreter_path: None,
-            is_bundled: false,
-        }),
+        None => {
+            let failed = {
+                let reg = state.plugin_registry.read().await;
+                matches!(
+                    reg.get_plugin_info("plugin-python-runtime")
+                        .map(|p| &p.status),
+                    Some(cluster_runtime_core::plugin_registry::PluginStatus::Error)
+                )
+            };
+            Ok(PythonRuntimeHealth {
+                status: if failed {
+                    cluster_runtime_core::python_runtime::types::RuntimeStatus::Failed
+                } else {
+                    cluster_runtime_core::python_runtime::types::RuntimeStatus::Initializing
+                },
+                python_version: None,
+                active_environment: None,
+                environment_path: None,
+                interpreter_path: None,
+                is_bundled: false,
+            })
+        }
+    }
+}
+
+/// Discover / download a Python interpreter and (re)start the Python Runtime plugin.
+///
+/// Used from the Plugins page when first-run auto-setup failed or was skipped.
+#[tauri::command]
+pub async fn python_ensure_runtime(
+    state: tauri::State<'_, cluster_runtime_core::AppState>,
+) -> Result<PythonRuntimeHealth, String> {
+    let app_version = env!("CARGO_PKG_VERSION");
+    let manifest = {
+        let reg = state.plugin_registry.read().await;
+        reg.get_manifest("plugin-python-runtime")
+            .cloned()
+            .ok_or_else(|| {
+                "Python Runtime plugin is not registered. Restart the application.".to_string()
+            })?
+    };
+
+    cluster_runtime_core::plugin_loader::enabled::set_enabled(
+        &state.data_dir,
+        "plugin-python-runtime",
+        true,
+        &manifest,
+    )?;
+    {
+        let mut reg = state.plugin_registry.write().await;
+        reg.set_enabled_flag("plugin-python-runtime", true);
+        reg.update_plugin_status(
+            "plugin-python-runtime",
+            cluster_runtime_core::plugin_registry::PluginStatus::Initializing,
+        );
+    }
+
+    log::info!("python_ensure_runtime: starting (may download standalone Python)…");
+    let ctx = cluster_runtime_core::plugin_host::factories::PluginStartContext {
+        state: state.inner(),
+        app_version,
+    };
+    if let Err(e) =
+        cluster_runtime_core::plugin_host::factories::start_plugin(&manifest, &ctx).await
+    {
+        let mut reg = state.plugin_registry.write().await;
+        reg.update_plugin_status(
+            "plugin-python-runtime",
+            cluster_runtime_core::plugin_registry::PluginStatus::Error,
+        );
+        return Err(e);
+    }
+
+    let lock = state.python_service.read().await;
+    match lock.as_ref() {
+        Some(svc) => svc.runtime_health().await.map_err(|e| e.to_string()),
+        None => Err("Python Runtime started but service is unavailable".into()),
     }
 }
 

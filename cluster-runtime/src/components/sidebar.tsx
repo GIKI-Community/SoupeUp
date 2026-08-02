@@ -16,14 +16,14 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
-  { to: "/cluster", label: "Cluster", icon: Network },
-  { to: "/compute", label: "Compute", icon: Server },
-  { to: "/nodes", label: "Nodes", icon: Server },
-  { to: "/jobs", label: "Jobs", icon: Box },
-  { to: "/plugins", label: "Plugins", icon: Puzzle },
-  { to: "/metrics", label: "Metrics", icon: Activity },
-  { to: "/logs", label: "Logs", icon: ScrollText },
-  { to: "/settings", label: "Settings", icon: Settings },
+  { to: "/cluster", label: "Cluster", icon: Network, end: false },
+  { to: "/compute", label: "Compute", icon: Server, end: false },
+  { to: "/nodes", label: "Nodes", icon: Server, end: false },
+  { to: "/jobs", label: "Jobs", icon: Box, end: false },
+  { to: "/plugins", label: "Plugins", icon: Puzzle, end: false },
+  { to: "/metrics", label: "Metrics", icon: Activity, end: false },
+  { to: "/logs", label: "Logs", icon: ScrollText, end: false },
+  { to: "/settings", label: "Settings", icon: Settings, end: false },
 ] as const;
 
 export function Sidebar() {

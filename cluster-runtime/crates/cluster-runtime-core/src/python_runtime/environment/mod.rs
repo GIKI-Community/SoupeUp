@@ -119,8 +119,8 @@ impl EnvironmentManager {
             );
             return Err(PythonError::EnvironmentError(format!(
                 "Failed to create venv '{}': {}. \
-                 On Ubuntu install `python3-venv python3-pip`, or run \
-                 `scripts/Setup-PythonRuntime.sh` to download a standalone Python.",
+                 On Ubuntu install `python3-venv python3-pip`, or restart so Cluster Runtime \
+                 can download a standalone Python into the data directory.",
                 name, detail
             )));
         }

@@ -20,7 +20,13 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| PathBuf::from("./data"));
+            let _ = std::fs::create_dir_all(&data_dir);
+            cluster_runtime_core::logging::attach_file_log(&data_dir);
             log::info!("app: data_dir={}", data_dir.display());
+            log::info!(
+                "app: managed Python (if downloaded) → {}\\python\\python.exe",
+                data_dir.display()
+            );
             let state = AppState::new(data_dir);
             app.manage(state);
 
@@ -56,6 +62,7 @@ pub fn run() {
             commands::python_delete_environment,
             commands::python_activate_environment,
             commands::python_runtime_health,
+            commands::python_ensure_runtime,
             commands::python_version,
             commands::python_list_environments,
             commands::python_package_index,

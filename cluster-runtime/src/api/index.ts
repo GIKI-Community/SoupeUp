@@ -173,6 +173,8 @@ export const PythonApi = {
     invokeCommand<EnvironmentInfo[]>("python_list_environments"),
   runtimeHealth: () =>
     invokeCommand<PythonRuntimeHealth>("python_runtime_health"),
+  ensureRuntime: () =>
+    invokeCommand<PythonRuntimeHealth>("python_ensure_runtime"),
   version: () => invokeCommand<string>("python_version"),
   packageIndex: () => invokeCommand<string>("python_package_index"),
   setPackageIndex: (indexUrl: string) =>

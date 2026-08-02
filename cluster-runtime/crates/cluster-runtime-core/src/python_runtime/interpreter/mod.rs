@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use crate::python_runtime::download::{self, is_compatible_base};
 use crate::python_runtime::utils::{bundled_python_dir, parse_python_version};
 use crate::python_runtime::types::PythonError;
 
@@ -9,7 +10,8 @@ pub struct PythonInterpreter {
     pub path: PathBuf,
     /// Version string, e.g. `"3.10.11"`.
     pub version: String,
-    /// Whether this interpreter came from the bundled distribution.
+    /// Whether this interpreter came from a managed/downloaded distribution
+    /// (as opposed to a system install).
     pub is_bundled: bool,
 }
 
@@ -23,13 +25,17 @@ impl PythonInterpreter {
             return None;
         }
 
-        let output = tokio::process::Command::new(path)
-            .arg("--version")
+        let mut cmd = tokio::process::Command::new(path);
+        cmd.arg("--version")
             // Python ≤3.3 printed to stderr; newer versions use stdout
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-            .await;
+            .stderr(std::process::Stdio::piped());
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = cmd.output().await;
 
         let output = match output {
             Ok(o) => o,
@@ -96,27 +102,14 @@ pub async fn env_python() -> Option<PythonInterpreter> {
     }
 }
 
-/// Try to use the bundled Python 3.10 distribution shipped inside the app.
-///
-/// The bundled distribution should be placed at:
-///   - Production: `<exe_dir>/python/` (copied by `tauri build` from `resources/python/`)
-///   - Dev:        `src-tauri/resources/python/`
-///
-/// Run `scripts/Setup-PythonRuntime.ps1` to download and stage Python 3.10.
+/// Optional colocated / leftover `resources/python` (dev machines). Not shipped.
 pub async fn embedded_python() -> Option<PythonInterpreter> {
     let base = bundled_python_dir()?;
 
-    log::info!("Looking for bundled Python in {}", base.display());
+    log::info!("Looking for colocated Python in {}", base.display());
 
-    // python-build-standalone layout on Windows:
-    //   python/python.exe  (install_only flavour)
-    // On Linux/macOS:
-    //   python/bin/python3
     let candidates: Vec<PathBuf> = if cfg!(windows) {
-        vec![
-            base.join("python.exe"),
-            base.join("python3.exe"),
-        ]
+        vec![base.join("python.exe"), base.join("python3.exe")]
     } else {
         vec![
             base.join("bin").join("python3"),
@@ -129,7 +122,7 @@ pub async fn embedded_python() -> Option<PythonInterpreter> {
     for candidate in candidates {
         if let Some(interp) = PythonInterpreter::probe(&candidate, true).await {
             log::info!(
-                "Bundled Python {} found at {}",
+                "Colocated Python {} found at {}",
                 interp.version,
                 interp.path.display()
             );
@@ -137,8 +130,21 @@ pub async fn embedded_python() -> Option<PythonInterpreter> {
         }
     }
 
-    log::warn!("Bundled Python directory exists but no usable binary in {}", base.display());
+    log::debug!(
+        "Colocated Python directory exists but no usable binary in {}",
+        base.display()
+    );
     None
+}
+
+/// Microsoft Store alias stubs under WindowsApps — they open the Store / flash
+/// a console and are not a usable interpreter for Cluster Runtime.
+fn is_windows_apps_stub(path: &Path) -> bool {
+    path.components().any(|c| {
+        c.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("WindowsApps")
+    })
 }
 
 /// Search the system PATH (and well-known absolute paths) for Python 3.x.
@@ -156,6 +162,13 @@ pub async fn find_existing_python() -> Option<PythonInterpreter> {
             "python.exe",
         ] {
             if let Some(p) = which(name) {
+                if is_windows_apps_stub(&p) {
+                    log::info!(
+                        "System Python: skipping WindowsApps stub {}",
+                        p.display()
+                    );
+                    continue;
+                }
                 candidates.push(p);
             }
         }
@@ -199,7 +212,19 @@ pub async fn find_existing_python() -> Option<PythonInterpreter> {
     );
 
     for path in candidates {
+        if is_windows_apps_stub(&path) {
+            continue;
+        }
         if let Some(interp) = PythonInterpreter::probe(&path, false).await {
+            if !is_compatible_base(&interp.version) {
+                log::warn!(
+                    "System Python {} at {} is outside the supported range; skipping \
+                     (will prefer download if nothing else works)",
+                    interp.version,
+                    interp.path.display()
+                );
+                continue;
+            }
             log::info!(
                 "System Python {} found at {}",
                 interp.version,
@@ -209,42 +234,57 @@ pub async fn find_existing_python() -> Option<PythonInterpreter> {
         }
     }
 
-    log::error!(
-        "No system Python 3.x found. On Ubuntu: `sudo apt install -y python3 python3-venv python3-pip`. \
-         Or set CLUSTER_RUNTIME_PYTHON=/path/to/python3"
-    );
+    log::warn!("No compatible system Python 3.x found on PATH");
     None
 }
 
-/// Placeholder for a future automatic Python download capability.
-pub async fn future_download(_version: &str) -> Result<PythonInterpreter, PythonError> {
-    Err(PythonError::InterpreterNotFound(
-        "Automatic Python download is not yet implemented. \
-         Install system Python 3, set CLUSTER_RUNTIME_PYTHON, or stage a bundled distribution."
-            .to_string(),
-    ))
+/// Discover or obtain a Python interpreter for this machine.
+///
+/// Priority:
+///   1. `CLUSTER_RUNTIME_PYTHON`
+///   2. Compatible system Python (packages go in CR-managed venvs)
+///   3. Previously downloaded install under `{data_dir}/python/`
+///   4. Optional colocated `python/` next to the binary / resources (dev only)
+///   5. Download python-build-standalone into `{data_dir}/python/`
+pub async fn discover_python() -> Option<PythonInterpreter> {
+    match ensure_python().await {
+        Ok(interp) => Some(interp),
+        Err(e) => {
+            log::error!("Python discovery failed: {e}");
+            None
+        }
+    }
 }
 
-/// Discover the best available Python interpreter.
-///
-/// Priority order:
-///   1. `CLUSTER_RUNTIME_PYTHON`
-///   2. Bundled Python (python-build-standalone, inside the app)
-///   3. System Python on PATH / well-known paths
-pub async fn discover_python() -> Option<PythonInterpreter> {
+/// Like [`discover_python`], but returns a detailed error.
+pub async fn ensure_python() -> Result<PythonInterpreter, PythonError> {
     if let Some(interp) = env_python().await {
-        return Some(interp);
+        return Ok(interp);
+    }
+
+    if let Some(interp) = find_existing_python().await {
+        log::info!(
+            "Using system Python {} — workloads run in isolated venvs under the data dir",
+            interp.version
+        );
+        return Ok(interp);
+    }
+
+    if let Some(interp) = download::probe_managed().await {
+        log::info!(
+            "Using managed Python {} at {}",
+            interp.version,
+            interp.path.display()
+        );
+        return Ok(interp);
     }
 
     if let Some(interp) = embedded_python().await {
-        return Some(interp);
+        return Ok(interp);
     }
 
-    log::warn!(
-        "Bundled Python not found. Falling back to system Python."
-    );
-
-    find_existing_python().await
+    log::info!("No local Python found — downloading a compatible standalone interpreter…");
+    download::download_standalone().await
 }
 
 // ─── Internal ─────────────────────────────────────────────────────────────────

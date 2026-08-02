@@ -126,6 +126,8 @@ async fn main() {
 
     let cli = Cli::parse();
     let data_dir = cli.data_dir.clone().unwrap_or_else(resolve_data_dir);
+    let _ = std::fs::create_dir_all(&data_dir);
+    cluster_runtime_core::logging::attach_file_log(&data_dir);
     apply_env(&cli, &data_dir);
 
     // Ensure plugins dir exists and manifests are seeded before enable/disable flags.

@@ -35,8 +35,10 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/python/*": "python/",
-      "../crates/cluster-runtime-core/resources/plugins/**/*": "plugins/"
+      "../crates/cluster-runtime-core/resources/plugins/plugin-python-runtime/manifest.toml": "plugins/plugin-python-runtime/manifest.toml",
+      "../crates/cluster-runtime-core/resources/plugins/plugin-dask-scheduler/manifest.toml": "plugins/plugin-dask-scheduler/manifest.toml",
+      "../crates/cluster-runtime-core/resources/plugins/plugin-ray/manifest.toml": "plugins/plugin-ray/manifest.toml",
+      "../crates/cluster-runtime-core/resources/plugins/plugin-mpi/manifest.toml": "plugins/plugin-mpi/manifest.toml"
     }
   }
 }

@@ -1,7 +1,9 @@
-//! Runtime logging: stderr + in-memory ring buffer for the Logs UI.
+//! Runtime logging: stderr + optional file + in-memory ring for the Logs UI.
 
 use std::collections::VecDeque;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::Utc;
@@ -51,6 +53,8 @@ struct RingState {
 }
 
 static RING: Mutex<Option<RingState>> = Mutex::new(None);
+static FILE_LOG: Mutex<Option<File>> = Mutex::new(None);
+static FILE_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 struct AppLogger {
     max_level: LevelFilter,
@@ -71,15 +75,21 @@ impl Log for AppLogger {
         let message = format!("{}", record.args());
         let now = Utc::now();
 
-        // Console (visible when running from a terminal / `pnpm tauri dev`).
-        let _ = writeln!(
-            std::io::stderr(),
-            "{} [{:>5}] {}: {}",
-            now.format("%H:%M:%S%.3f"),
+        let line = format!(
+            "{} [{:>5}] {}: {}\n",
+            now.format("%Y-%m-%d %H:%M:%S%.3f"),
             level,
             target,
             message
         );
+
+        // Console (visible when running from a terminal / `pnpm tauri dev`).
+        let _ = write!(std::io::stderr(), "{line}");
+
+        if let Some(file) = FILE_LOG.lock().as_mut() {
+            let _ = file.write_all(line.as_bytes());
+            let _ = file.flush();
+        }
 
         let entry = LogEntry {
             id: format!(
@@ -103,7 +113,11 @@ impl Log for AppLogger {
         ring.entries.push_back(entry);
     }
 
-    fn flush(&self) {}
+    fn flush(&self) {
+        if let Some(file) = FILE_LOG.lock().as_mut() {
+            let _ = file.flush();
+        }
+    }
 }
 
 /// Install the global logger (safe to call once; subsequent calls are ignored).
@@ -132,6 +146,28 @@ pub fn init() {
     log::info!(
         "logging: ready (level={max_level:?}, set RUST_LOG=debug for more detail)"
     );
+}
+
+/// Append logs to `{data_dir}/logs/cluster-runtime.log` (GUI installs have no console).
+pub fn attach_file_log(data_dir: &Path) {
+    let dir = data_dir.join("logs");
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log::warn!("logging: cannot create {}: {e}", dir.display());
+        return;
+    }
+    let path = dir.join("cluster-runtime.log");
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => {
+            *FILE_LOG.lock() = Some(file);
+            *FILE_PATH.lock() = Some(path.clone());
+            log::info!("logging: writing to {}", path.display());
+        }
+        Err(e) => log::warn!("logging: cannot open {}: {e}", path.display()),
+    }
+}
+
+pub fn file_log_path() -> Option<PathBuf> {
+    FILE_PATH.lock().clone()
 }
 
 fn parse_level(raw: &str) -> LevelFilter {

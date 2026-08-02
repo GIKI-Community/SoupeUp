@@ -1,1 +1,2 @@
-# Run scripts/Setup-PythonRuntime.ps1 to stage the bundled Python distribution.
+# Optional. Runtime auto-downloads Python into the app data dir when needed.
+# For manual staging: scripts/Setup-PythonRuntime.ps1

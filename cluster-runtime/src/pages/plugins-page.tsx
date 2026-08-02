@@ -1,4 +1,4 @@
-import { Loader2, Play, Settings2 } from "lucide-react";
+import { Download, Loader2, Play, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -28,6 +28,26 @@ const SETTINGS_TAB_BY_PLUGIN: Record<string, string> = {
   "plugin-ray": "ray",
 };
 
+function pythonNeedsInstall(
+  plugin: Plugin | undefined,
+  health: PythonRuntimeHealth | null,
+) {
+  if (!plugin) return true;
+  if (plugin.status === "running") {
+    return health?.status === "failed";
+  }
+  // Avoid nagging while auto-start is still in progress.
+  if (plugin.status === "initializing") {
+    return health?.status === "failed";
+  }
+  return (
+    plugin.status === "error" ||
+    plugin.status === "discovered" ||
+    plugin.status === "disabled" ||
+    health?.status === "failed"
+  );
+}
+
 function healthVariant(
   status: PythonRuntimeHealth["status"],
 ): "success" | "warning" | "destructive" | "muted" {
@@ -44,12 +64,40 @@ function healthVariant(
   }
 }
 
-function PythonRuntimeDetail() {
+function InstallPythonButton({
+  busy,
+  onClick,
+  size = "sm",
+}: {
+  busy: boolean;
+  onClick: () => void;
+  size?: "sm" | "default";
+}) {
+  return (
+    <Button size={size} disabled={busy} onClick={onClick}>
+      {busy ? (
+        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Download className="mr-1.5 h-3.5 w-3.5" />
+      )}
+      {busy ? "Installing Python…" : "Install Python"}
+    </Button>
+  );
+}
+
+function PythonRuntimeDetail({
+  needsInstall,
+  onInstall,
+}: {
+  needsInstall: boolean;
+  onInstall: () => void;
+}) {
   const {
     health,
     packages,
     isExecuting,
     isInstalling,
+    isEnsuring,
     isLoading,
     lastResult,
     error,
@@ -64,13 +112,31 @@ function PythonRuntimeDetail() {
 
   useEffect(() => {
     void fetchHealth();
-    void fetchPackages();
-  }, [fetchHealth, fetchPackages]);
+    if (!needsInstall) {
+      void fetchPackages();
+    }
+  }, [fetchHealth, fetchPackages, needsInstall]);
 
   const ready = health?.status === "ready" || health?.status === "degraded";
 
   return (
     <div className="mt-4 space-y-4 border-t border-border/60 pt-4">
+      {needsInstall && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm">
+          <p className="font-medium text-amber-700 dark:text-amber-300">
+            Python is not ready
+          </p>
+          <p className="mt-1 text-muted-foreground">
+            Download a compatible interpreter into the app data directory (or use
+            system Python if available), then start the runtime. First run needs
+            network access and may take a minute.
+          </p>
+          <div className="mt-3">
+            <InstallPythonButton busy={isEnsuring} onClick={onInstall} />
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         {health?.pythonVersion && (
           <Badge variant="secondary">Python {health.pythonVersion}</Badge>
@@ -80,7 +146,7 @@ function PythonRuntimeDetail() {
             {health.status}
           </Badge>
         )}
-        {health?.isBundled && <Badge variant="outline">bundled</Badge>}
+        {health?.isBundled && <Badge variant="outline">managed</Badge>}
       </div>
 
       <div className="grid gap-2 text-sm sm:grid-cols-2">
@@ -111,7 +177,11 @@ function PythonRuntimeDetail() {
             disabled={!ready || isLoading}
             onClick={() => void fetchPackages()}
           >
-            {isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
+            {isLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              "Refresh"
+            )}
           </Button>
         </div>
         <div className="mb-3 flex gap-2">
@@ -156,7 +226,9 @@ function PythonRuntimeDetail() {
                 packages.map((pkg) => (
                   <TableRow key={pkg.name}>
                     <TableCell className="font-mono text-xs">{pkg.name}</TableCell>
-                    <TableCell className="font-mono text-xs">{pkg.version}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {pkg.version}
+                    </TableCell>
                   </TableRow>
                 ))
               )}
@@ -267,6 +339,9 @@ function PluginCard({
   onToggle,
   updateCheck,
   busy,
+  showInstallPython,
+  installBusy,
+  onInstallPython,
   onEnable,
   onDisable,
   onCheckUpdate,
@@ -278,6 +353,9 @@ function PluginCard({
   onToggle: () => void;
   updateCheck?: PluginUpdateCheck;
   busy: boolean;
+  showInstallPython: boolean;
+  installBusy: boolean;
+  onInstallPython: () => void;
   onEnable: () => void;
   onDisable: () => void;
   onCheckUpdate: () => void;
@@ -309,6 +387,9 @@ function PluginCard({
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">
+          {isPython && showInstallPython && (
+            <InstallPythonButton busy={installBusy} onClick={onInstallPython} />
+          )}
           {isPython && (
             <Button variant="outline" size="sm" onClick={onToggle}>
               {expanded ? "Hide" : "Manage"}
@@ -369,7 +450,12 @@ function PluginCard({
           {plugin.id}
         </p>
         {updateCheck && <UpdateNotice check={updateCheck} />}
-        {isPython && expanded && <PythonRuntimeDetail />}
+        {isPython && expanded && (
+          <PythonRuntimeDetail
+            needsInstall={showInstallPython}
+            onInstall={onInstallPython}
+          />
+        )}
       </CardContent>
     </Card>
   );
@@ -388,6 +474,13 @@ export function PluginsPage() {
     checkUpdate,
     clearActionError,
   } = usePluginsStore();
+  const {
+    health,
+    isEnsuring,
+    error: pythonError,
+    fetchHealth,
+    ensureRuntime,
+  } = usePythonRuntimeStore();
   const [expandedId, setExpandedId] = useState<string | null>(PYTHON_RUNTIME_ID);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [installPath, setInstallPath] = useState("");
@@ -395,11 +488,16 @@ export function PluginsPage() {
 
   useEffect(() => {
     void fetchPlugins();
+    void fetchHealth();
     const id = window.setInterval(() => {
       void fetchPlugins();
+      void fetchHealth();
     }, 3000);
     return () => window.clearInterval(id);
-  }, [fetchPlugins]);
+  }, [fetchPlugins, fetchHealth]);
+
+  const pythonPlugin = plugins.find((p) => p.id === PYTHON_RUNTIME_ID);
+  const needsPythonInstall = pythonNeedsInstall(pythonPlugin, health);
 
   const runBusy = async (id: string, fn: () => Promise<unknown>) => {
     setBusyId(id);
@@ -408,6 +506,16 @@ export function PluginsPage() {
     } finally {
       setBusyId(null);
     }
+  };
+
+  const handleInstallPython = () => {
+    void (async () => {
+      const ok = await ensureRuntime();
+      await fetchPlugins();
+      if (ok) {
+        setExpandedId(PYTHON_RUNTIME_ID);
+      }
+    })();
   };
 
   return (
@@ -426,6 +534,30 @@ export function PluginsPage() {
           </Button>
         }
       />
+
+      {needsPythonInstall && (
+        <Card className="mb-4 border-amber-500/30 bg-amber-500/10">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 pt-6">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
+                Python Runtime is not installed
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Install a compatible Python (system or download) so Dask, Ray, and
+                jobs can start. Files go under the app data directory.
+              </p>
+              {pythonError && (
+                <p className="text-sm text-destructive">{pythonError}</p>
+              )}
+            </div>
+            <InstallPythonButton
+              busy={isEnsuring}
+              onClick={handleInstallPython}
+              size="default"
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {actionError && (
         <p className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -479,6 +611,11 @@ export function PluginsPage() {
             expanded={expandedId === plugin.id}
             updateCheck={updateChecks[plugin.id]}
             busy={busyId === plugin.id}
+            showInstallPython={
+              plugin.id === PYTHON_RUNTIME_ID && needsPythonInstall
+            }
+            installBusy={isEnsuring}
+            onInstallPython={handleInstallPython}
             onToggle={() =>
               setExpandedId((current) =>
                 current === plugin.id ? null : plugin.id,

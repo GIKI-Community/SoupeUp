@@ -96,16 +96,12 @@ async fn start_python(ctx: &PluginStartContext<'_>) -> Result<(), String> {
         reg.update_plugin_status("plugin-python-runtime", PluginStatus::Initializing);
     }
 
-    let interpreter = python_runtime::interpreter::discover_python()
+    let interpreter = python_runtime::interpreter::ensure_python()
         .await
-        .ok_or_else(|| {
-            "No Python interpreter found. On Ubuntu: `sudo apt install -y python3 python3-venv python3-pip`. \
-             Or set CLUSTER_RUNTIME_PYTHON=/usr/bin/python3"
-                .to_string()
-        })?;
+        .map_err(|e| e.to_string())?;
 
     log::info!(
-        "plugins: using Python {} at {} (bundled={})",
+        "plugins: using Python {} at {} (managed/bundled={})",
         interpreter.version,
         interpreter.path.display(),
         interpreter.is_bundled

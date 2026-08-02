@@ -54,14 +54,25 @@ its methods. Do not shell out to system Python directly.
 Tauri commands mirror the service (`python_execute_code`, `python_list_packages`,
 etc.) for the frontend.
 
-## Bundled Python setup
+## Python setup
+
+Python is **not** bundled in the installer. On first run Cluster Runtime will:
+
+1. Use `CLUSTER_RUNTIME_PYTHON` if set
+2. Else a compatible system Python 3.x (packages go into CR-managed venvs)
+3. Else reuse `{data_dir}/python/` if already downloaded
+4. Else fetch [`python-runtime-manifest.json`](../../python-runtime-manifest.json)
+   (override with `CLUSTER_RUNTIME_PYTHON_MANIFEST_URL`) and download the
+   platform archive listed there into `{data_dir}/python/`
+
+Update download links by editing that manifest and pushing to `main` — **no app
+rebuild required**.
+
+Optional manual staging (dev / offline):
 
 ```powershell
 scripts/Setup-PythonRuntime.ps1
 ```
-
-Stages python-build-standalone (Python 3.10.x) into `src-tauri/resources/python/`.
-Required for Dask and Ray on Windows.
 
 ## Tests
 

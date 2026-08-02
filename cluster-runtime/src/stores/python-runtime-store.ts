@@ -14,11 +14,13 @@ interface PythonRuntimeState {
   isExecuting: boolean;
   isInstalling: boolean;
   isLoading: boolean;
+  isEnsuring: boolean;
   lastResult: ExecutionResult | null;
   error: string | null;
   fetchHealth: () => Promise<void>;
   fetchPackages: () => Promise<void>;
   fetchPackageIndex: () => Promise<void>;
+  ensureRuntime: () => Promise<boolean>;
   executeCode: (code: string) => Promise<ExecutionResult | null>;
   installPackage: (name: string, version?: string) => Promise<boolean>;
   uninstallPackage: (name: string) => Promise<boolean>;
@@ -31,6 +33,7 @@ export const usePythonRuntimeStore = create<PythonRuntimeState>((set, get) => ({
   isExecuting: false,
   isInstalling: false,
   isLoading: false,
+  isEnsuring: false,
   lastResult: null,
   error: null,
 
@@ -66,6 +69,27 @@ export const usePythonRuntimeStore = create<PythonRuntimeState>((set, get) => ({
       set({ packageIndex });
     } catch {
       set({ packageIndex: "https://pypi.org/simple" });
+    }
+  },
+
+  ensureRuntime: async () => {
+    set({ isEnsuring: true, error: null });
+    try {
+      const health = await PythonApi.ensureRuntime();
+      set({ health, isEnsuring: false, error: null });
+      if (health.status === "ready" || health.status === "degraded") {
+        await get().fetchPackages();
+      }
+      return true;
+    } catch (error) {
+      set({
+        isEnsuring: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to install / start Python Runtime",
+      });
+      return false;
     }
   },
 

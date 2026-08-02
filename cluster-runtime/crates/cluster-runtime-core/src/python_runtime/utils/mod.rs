@@ -41,13 +41,13 @@ pub fn environments_base_dir() -> PathBuf {
     exe_dir().join("runtime").join("python").join("environments")
 }
 
-/// Directory where a downloaded/staged Python distribution is expected.
+/// Directory where a downloaded/staged Python distribution may live.
 ///
 /// Search order:
 /// 1. `$CLUSTER_RUNTIME_PYTHON_DIR` if set
-/// 2. `{data_dir}/python/` (per-machine download via setup script)
+/// 2. `{data_dir}/python/` (per-machine download)
 /// 3. `<exe_dir>/python/` (optional colocated install)
-/// 4. Walk parents looking for `resources/python` or `src-tauri/resources/python`
+/// 4. Walk parents looking for `resources/python` or `src-tauri/resources/python` (dev)
 pub fn bundled_python_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("CLUSTER_RUNTIME_PYTHON_DIR") {
         let p = PathBuf::from(dir);
@@ -95,7 +95,7 @@ pub fn bundled_python_dir() -> Option<PathBuf> {
 }
 
 /// Return the directory containing the current executable.
-fn exe_dir() -> PathBuf {
+pub fn exe_dir() -> PathBuf {
     std::env::current_exe()
         .expect("Cannot determine executable path")
         .parent()
@@ -159,6 +159,12 @@ pub async fn run_command_captured(
 
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    // GUI builds must not flash a console for every python/pip call.
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
 
     let child = cmd.spawn().map_err(|e| PythonError::ExecutionError(
         format!("Failed to spawn `{}`: {}", program.display(), e)

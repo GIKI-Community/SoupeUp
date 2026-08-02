@@ -1,18 +1,19 @@
-# Python 3.10 Runtime Setup Script
-# Downloads the python-build-standalone distribution and stages it
-# in src-tauri/resources/python/ for bundling with the Tauri app.
+# Optional / offline Python staging
+# Downloads python-build-standalone for local/dev use. Release builds do NOT
+# bundle Python — the app downloads into {data_dir}/python/ on first run when
+# no compatible system interpreter is found.
 #
-# We ship Python 3.10.x so both Dask and Ray install cleanly on Windows
+# We use Python 3.10.x so both Dask and Ray install cleanly on Windows
 # (Ray Windows wheels do not support Python 3.13+).
 #
 # Usage:
 #   scripts/Setup-PythonRuntime.ps1
-#   scripts/Setup-PythonRuntime.ps1 -PythonVersion "3.10.11"
+#   scripts/Setup-PythonRuntime.ps1 -PythonVersion "3.10.20"
 #   scripts/Setup-PythonRuntime.ps1 -Force   # re-download even if already staged
 
 param(
-    # 3.10.10 is not published by python-build-standalone; we remap to 3.10.11.
-    [string]$PythonVersion = "3.10.10",
+    # Prefer a currently published python-build-standalone 3.10.x build.
+    [string]$PythonVersion = "3.10.20",
     [switch]$Force = $false
 )
 
@@ -32,9 +33,9 @@ $BaseUrl = "https://github.com/astral-sh/python-build-standalone/releases/downlo
 
 # Known (version -> release tag) pairs for Windows x86_64 install_only builds.
 $KnownBuilds = @{
-    "3.10.11" = "20230507"
     "3.10.16" = "20241219"
     "3.10.19" = "20251010"
+    "3.10.20" = "20260610"
 }
 
 $Arch    = "x86_64"
@@ -63,12 +64,12 @@ function Resolve-PythonBuild([string]$requestedVersion) {
         }
     }
 
-    if ($requestedVersion -eq "3.10.10") {
-        Write-Warn "Exact Python 3.10.10 is not published by python-build-standalone."
-        Write-Warn "Using 3.10.11 (closest available patch) instead."
+    if ($requestedVersion -eq "3.10.10" -or $requestedVersion -eq "3.10.11") {
+        Write-Warn "Python $requestedVersion is no longer published by python-build-standalone."
+        Write-Warn "Using 3.10.20 instead."
         return @{
-            Version = "3.10.11"
-            Tag     = $KnownBuilds["3.10.11"]
+            Version = "3.10.20"
+            Tag     = $KnownBuilds["3.10.20"]
         }
     }
 
@@ -106,7 +107,8 @@ Write-Ok "Resources dir: $ResourcesDir"
 
 # Download
 $FileName = "cpython-${PythonVersion}+${Tag}-${Arch}-pc-windows-msvc-${Flavour}.tar.gz"
-$DownloadUrl = "${BaseUrl}/${Tag}/${FileName}"
+$EncodedName = $FileName.Replace('+', '%2B')
+$DownloadUrl = "${BaseUrl}/${Tag}/${EncodedName}"
 
 Write-Step "Downloading Python $PythonVersion"
 Write-Host "   Source: $DownloadUrl" -ForegroundColor DarkGray

@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "pythonVersion": "3.10.20",
+  "updated": "2026-08-02",
+  "note": "Edit this file when python-build-standalone links change. Installed apps fetch it at first-run (no rebuild required). Override with CLUSTER_RUNTIME_PYTHON_MANIFEST_URL.",
+  "platforms": {
+    "windows-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.10.20%2B20260610-x86_64-pc-windows-msvc-install_only.tar.gz",
+      "archive": "cpython-3.10.20+20260610-x86_64-pc-windows-msvc-install_only.tar.gz"
+    },
+    "linux-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.10.20%2B20260610-x86_64-unknown-linux-gnu-install_only.tar.gz",
+      "archive": "cpython-3.10.20+20260610-x86_64-unknown-linux-gnu-install_only.tar.gz"
+    },
+    "macos-x86_64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.10.20%2B20260610-x86_64-apple-darwin-install_only.tar.gz",
+      "archive": "cpython-3.10.20+20260610-x86_64-apple-darwin-install_only.tar.gz"
+    },
+    "macos-aarch64": {
+      "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260610/cpython-3.10.20%2B20260610-aarch64-apple-darwin-install_only.tar.gz",
+      "archive": "cpython-3.10.20+20260610-aarch64-apple-darwin-install_only.tar.gz"
+    }
+  }
+}

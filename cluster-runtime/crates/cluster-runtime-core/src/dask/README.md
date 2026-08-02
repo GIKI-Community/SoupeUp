@@ -156,7 +156,7 @@ If the iframe is blank (CSP / WebView limits), use **Open** (system browser via 
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Plugin stuck Initializing / Error | No Python interpreter | Run `scripts/Setup-PythonRuntime.ps1` |
+| Plugin stuck Initializing / Error | No Python / download failed | Install system Python 3.10–3.12, or ensure network + `tar` so first-run download works |
 | Package install failures | Network / index | Check Settings → Python package index; retry Ensure Packages |
 | Worker cannot connect | Wrong address / firewall | Use LAN IP, open port 8786, confirm scheduler Running |
 | Dashboard blank | iframe blocked | Click Open |

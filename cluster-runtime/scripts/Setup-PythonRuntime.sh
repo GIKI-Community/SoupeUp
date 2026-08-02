@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-PYTHON_VERSION="${PYTHON_VERSION:-3.10.11}"
-TAG="${TAG:-20230507}"
+PYTHON_VERSION="${PYTHON_VERSION:-3.10.20}"
+TAG="${TAG:-20260610}"
 ARCH="x86_64"
 FLAVOUR="install_only"
 FORCE=0
@@ -57,7 +57,7 @@ fi
 
 BASE_URL="https://github.com/astral-sh/python-build-standalone/releases/download"
 FILE_NAME="cpython-${PYTHON_VERSION}+${TAG}-${ARCH}-unknown-linux-gnu-${FLAVOUR}.tar.gz"
-DOWNLOAD_URL="${BASE_URL}/${TAG}/${FILE_NAME}"
+DOWNLOAD_URL="${BASE_URL}/${TAG}/${FILE_NAME//+/%2B}"
 TEMP_DIR="${TMPDIR:-/tmp}/cluster_runtime_python_setup"
 ARCHIVE_PATH="${TEMP_DIR}/${FILE_NAME}"
 
