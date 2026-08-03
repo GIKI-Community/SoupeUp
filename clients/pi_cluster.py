@@ -7,7 +7,7 @@ def main():
 
     # Tune these up/down for load
     TOTAL_SAMPLES = 50_000_000   # 50 million
-    N_CHUNKS = 32
+    N_CHUNKS = 320
 
     def count_inside(n: int) -> int:
         # Independent RNG stream per task (no shared state)
