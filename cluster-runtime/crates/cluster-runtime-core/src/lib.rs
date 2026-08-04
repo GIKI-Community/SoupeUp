@@ -55,7 +55,7 @@ pub struct AppState {
     pub ray_service: Arc<tokio::sync::RwLock<Option<Arc<RayService>>>>,
     /// The MPI service. Initialized independently of Python.
     pub mpi_service: Arc<tokio::sync::RwLock<Option<Arc<MpiService>>>>,
-    /// WAN libp2p mesh (optional until started).
+    /// WAN iroh mesh (optional until started).
     pub p2p_service: Arc<tokio::sync::RwLock<Option<Arc<crate::network::p2p::P2pService>>>>,
     pub scheduler_registry: Arc<SchedulerRegistry>,
     pub job_history: Arc<JobHistoryStore>,

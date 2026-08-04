@@ -1,26 +1,25 @@
-//! libp2p swarm service: listen, dial bootstrap peers, relay jobs.
+//! iroh WAN mesh: dial by EndpointId, relay jobs, optional TCP tunnels.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
-use futures::StreamExt;
-use libp2p::identify;
-use libp2p::multiaddr::Protocol;
-use libp2p::request_response::{Event as RrEvent, Message};
-use libp2p::swarm::{Swarm, SwarmEvent};
-use libp2p::{Multiaddr, PeerId, SwarmBuilder};
+use iroh::endpoint::presets;
+use iroh::protocol::Router;
+use iroh::{Endpoint, EndpointAddr, EndpointId};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::RwLock;
 
 use crate::jobs::JobApi;
-use crate::network::{NodeStatus, PeerInfo, ResourceInfo};
+use crate::network::PeerInfo;
 
-use super::behaviour::{ClusterBehaviour, ClusterBehaviourEvent};
+use super::framing::{read_msg, write_msg};
 use super::identity;
-use super::protocol::{RemoteJobRequest, RemoteJobResponse};
+use super::job_handler::JobProtocolHandler;
+use super::peer_record::PeerRecord;
+use super::protocol::{RemoteJobRequest, RemoteJobResponse, JOB_ALPN, TCP_PROXY_ALPN};
+use super::tcp_proxy::{self, TcpProxyHandler, TcpTunnel};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -30,171 +29,152 @@ pub struct PeerSnapshot {
     pub connected: bool,
 }
 
-enum Command {
-    Dial(Multiaddr, oneshot::Sender<Result<(), String>>),
-    Request {
-        peer: PeerId,
-        request: RemoteJobRequest,
-        reply: oneshot::Sender<Result<RemoteJobResponse, String>>,
-    },
-    ListPeers(oneshot::Sender<Vec<PeerInfo>>),
-    LocalPeerId(oneshot::Sender<String>),
-    ListenAddrs(oneshot::Sender<Vec<String>>),
-    Shutdown,
-}
-
-/// WAN P2P mesh handle.
+/// WAN P2P mesh handle (iroh under the hood; name kept for API stability).
 pub struct P2pService {
-    cmd_tx: mpsc::Sender<Command>,
+    endpoint: Endpoint,
+    router: Router,
     local_peer_id: String,
+    peers: Arc<RwLock<HashMap<EndpointId, PeerRecord>>>,
+    /// Active local TCP tunnels (worker → remote scheduler).
+    tunnels: Arc<RwLock<Vec<TcpTunnel>>>,
+    node_name: String,
 }
 
 impl P2pService {
-    /// Start the swarm in a background task. Returns immediately.
-    pub async fn start(
-        data_dir: &Path,
-        job_api: Arc<JobApi>,
-    ) -> Result<Arc<Self>, String> {
-        let (keypair, peer_id) = identity::load_or_generate(data_dir)?;
-        let local_peer_id = peer_id.to_string();
+    /// Bind an iroh endpoint, register job + tcp-proxy ALPNs, dial bootstrap peers.
+    pub async fn start(data_dir: &Path, job_api: Arc<JobApi>) -> Result<Arc<Self>, String> {
+        let secret = identity::load_or_generate(data_dir)?;
         let node_name = std::env::var("CLUSTER_RUNTIME_NODE_NAME")
             .unwrap_or_else(|_| "cluster-node".into());
 
-        let mut swarm = SwarmBuilder::with_existing_identity(keypair)
-            .with_tokio()
-            .with_tcp(
-                libp2p::tcp::Config::default(),
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )
-            .map_err(|e| e.to_string())?
-            .with_websocket(
-                libp2p::noise::Config::new,
-                libp2p::yamux::Config::default,
-            )
+        let endpoint = Endpoint::builder(presets::N0)
+            .secret_key(secret)
+            .bind()
             .await
-            .map_err(|e| e.to_string())?
-            .with_behaviour(|key| ClusterBehaviour::new(key.public()))
-            .map_err(|e| e.to_string())?
-            .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
-            .build();
+            .map_err(|e| format!("iroh bind: {e}"))?;
 
-        let listen_addrs = resolve_listen_addrs();
-        for addr in &listen_addrs {
-            match swarm.listen_on(addr.clone()) {
-                Ok(_) => log::info!("P2P: listening on {addr}"),
-                Err(e) => log::warn!("P2P: failed to listen on {addr}: {e}"),
-            }
-        }
-
-        for addr in resolve_bootstrap_addrs() {
-            log::info!("P2P: dialing bootstrap {addr}");
-            if let Err(e) = swarm.dial(addr.clone()) {
-                log::warn!("P2P: bootstrap dial failed for {addr}: {e}");
-            }
-        }
-
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(64);
-        let peers: Arc<RwLock<HashMap<PeerId, PeerRecord>>> =
+        let local_peer_id = endpoint.id().to_string();
+        let peers: Arc<RwLock<HashMap<EndpointId, PeerRecord>>> =
             Arc::new(RwLock::new(HashMap::new()));
-        let pending: Arc<
-            RwLock<HashMap<libp2p::request_response::OutboundRequestId, oneshot::Sender<Result<RemoteJobResponse, String>>>>,
-        > = Arc::new(RwLock::new(HashMap::new()));
 
-        let peers_task = peers.clone();
-        let pending_task = pending.clone();
-        let local_id_for_task = peer_id;
-        let listen_reported = Arc::new(RwLock::new(Vec::<Multiaddr>::new()));
-        let listen_reported_task = listen_reported.clone();
+        let job_handler = JobProtocolHandler {
+            job_api,
+            node_name: node_name.clone(),
+            local_endpoint_id: local_peer_id.clone(),
+            peers: peers.clone(),
+        };
 
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    event = swarm.select_next_some() => {
-                        handle_swarm_event(
-                            &mut swarm,
-                            event,
-                            &peers_task,
-                            &pending_task,
-                            &job_api,
-                            &node_name,
-                            local_id_for_task,
-                            &listen_reported_task,
-                        ).await;
-                    }
-                    cmd = cmd_rx.recv() => {
-                        match cmd {
-                            Some(Command::Dial(addr, reply)) => {
-                                let r = swarm.dial(addr).map(|_| ()).map_err(|e| e.to_string());
-                                let _ = reply.send(r);
-                            }
-                            Some(Command::Request { peer, request, reply }) => {
-                                let id = swarm.behaviour_mut().jobs.send_request(&peer, request);
-                                pending_task.write().await.insert(id, reply);
-                            }
-                            Some(Command::ListPeers(reply)) => {
-                                let list = peers_task.read().await
-                                    .values()
-                                    .map(PeerRecord::to_peer_info)
-                                    .collect();
-                                let _ = reply.send(list);
-                            }
-                            Some(Command::LocalPeerId(reply)) => {
-                                let _ = reply.send(local_id_for_task.to_string());
-                            }
-                            Some(Command::ListenAddrs(reply)) => {
-                                let addrs = listen_reported_task.read().await
-                                    .iter()
-                                    .map(|a| a.to_string())
-                                    .collect();
-                                let _ = reply.send(addrs);
-                            }
-                            Some(Command::Shutdown) | None => {
-                                log::info!("P2P: swarm task stopping");
-                                break;
-                            }
-                        }
-                    }
-                }
+        let router = Router::builder(endpoint.clone())
+            .accept(JOB_ALPN, job_handler)
+            .accept(TCP_PROXY_ALPN, TcpProxyHandler)
+            .spawn();
+
+        // Wait briefly for relay/DNS so dials are more likely to succeed.
+        tokio::spawn({
+            let ep = endpoint.clone();
+            async move {
+                ep.online().await;
+                log::info!("iroh: endpoint online ({})", ep.id());
             }
         });
 
-        Ok(Arc::new(Self {
-            cmd_tx,
-            local_peer_id,
-        }))
+        let service = Arc::new(Self {
+            endpoint,
+            router,
+            local_peer_id: local_peer_id.clone(),
+            peers,
+            tunnels: Arc::new(RwLock::new(Vec::new())),
+            node_name,
+        });
+
+        for id in resolve_bootstrap_endpoint_ids() {
+            log::info!("iroh: dialing bootstrap {id}");
+            if let Err(e) = service.connect(&id.to_string()).await {
+                log::warn!("iroh: bootstrap dial failed for {id}: {e}");
+            }
+        }
+
+        log::info!("iroh: started (endpoint {local_peer_id})");
+        Ok(service)
     }
 
     pub fn local_peer_id(&self) -> &str {
         &self.local_peer_id
     }
 
-    pub async fn connect(&self, multiaddr: &str) -> Result<(), String> {
-        let addr: Multiaddr = multiaddr.parse().map_err(|e: libp2p::multiaddr::Error| e.to_string())?;
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::Dial(addr, tx))
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Dial a peer by EndpointId (DNS/Pkarr address lookup via n0 preset).
+    pub async fn connect(&self, endpoint_id: &str) -> Result<(), String> {
+        let id: EndpointId = endpoint_id
+            .parse()
+            .map_err(|e| format!("Invalid endpoint id: {e}"))?;
+        let addr = EndpointAddr::new(id);
+        let conn = self
+            .endpoint
+            .connect(addr, JOB_ALPN)
             .await
-            .map_err(|_| "P2P swarm stopped".to_string())?;
-        rx.await.map_err(|_| "P2P dial dropped".to_string())?
+            .map_err(|e| format!("iroh connect: {e}"))?;
+
+        let (mut send, mut recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| format!("open_bi: {e}"))?;
+
+        write_msg(
+            &mut send,
+            &RemoteJobRequest::Hello {
+                node_name: self.node_name.clone(),
+            },
+        )
+        .await?;
+        send.finish().map_err(|e| e.to_string())?;
+
+        let response: RemoteJobResponse = read_msg(&mut recv).await?;
+        let remote_name = match response {
+            RemoteJobResponse::Hello { node_name, .. } => node_name,
+            other => {
+                return Err(format!("unexpected hello response: {other:?}"));
+            }
+        };
+
+        let now = Utc::now();
+        self.peers.write().await.insert(
+            id,
+            PeerRecord {
+                endpoint_id: id,
+                node_name: remote_name,
+                connected_since: now,
+                last_seen: now,
+            },
+        );
+        log::info!("iroh: connected to {id}");
+        Ok(())
     }
 
     pub async fn list_peers(&self) -> Result<Vec<PeerInfo>, String> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::ListPeers(tx))
+        Ok(self
+            .peers
+            .read()
             .await
-            .map_err(|_| "P2P swarm stopped".to_string())?;
-        rx.await.map_err(|_| "P2P list dropped".to_string())
+            .values()
+            .map(PeerRecord::to_peer_info)
+            .collect())
     }
 
+    /// Home relay + direct addresses for this endpoint (for display / sharing).
     pub async fn listen_addrs(&self) -> Result<Vec<String>, String> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::ListenAddrs(tx))
-            .await
-            .map_err(|_| "P2P swarm stopped".to_string())?;
-        rx.await.map_err(|_| "P2P listen addrs dropped".to_string())
+        let addr = self.endpoint.addr();
+        let mut out = vec![format!("endpoint:{}", addr.id)];
+        for relay in addr.relay_urls() {
+            out.push(format!("relay:{relay}"));
+        }
+        for ip in addr.ip_addrs() {
+            out.push(format!("ip:{ip}"));
+        }
+        Ok(out)
     }
 
     pub async fn remote_request(
@@ -202,17 +182,39 @@ impl P2pService {
         peer_id: &str,
         request: RemoteJobRequest,
     ) -> Result<RemoteJobResponse, String> {
-        let peer: PeerId = peer_id.parse().map_err(|e| format!("Invalid peer id: {e}"))?;
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .send(Command::Request {
-                peer,
-                request,
-                reply: tx,
-            })
+        let id: EndpointId = peer_id
+            .parse()
+            .map_err(|e| format!("Invalid endpoint id: {e}"))?;
+        let addr = EndpointAddr::new(id);
+        let conn = self
+            .endpoint
+            .connect(addr, JOB_ALPN)
             .await
-            .map_err(|_| "P2P swarm stopped".to_string())?;
-        rx.await.map_err(|_| "P2P request dropped".to_string())?
+            .map_err(|e| format!("iroh connect: {e}"))?;
+        let (mut send, mut recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| format!("open_bi: {e}"))?;
+
+        write_msg(&mut send, &request).await?;
+        send.finish().map_err(|e| e.to_string())?;
+        let response: RemoteJobResponse = read_msg(&mut recv).await?;
+
+        // Refresh peer bookkeeping.
+        let now = Utc::now();
+        self.peers
+            .write()
+            .await
+            .entry(id)
+            .and_modify(|r| r.last_seen = now)
+            .or_insert(PeerRecord {
+                endpoint_id: id,
+                node_name: id.to_string(),
+                connected_since: now,
+                last_seen: now,
+            });
+
+        Ok(response)
     }
 
     pub async fn remote_submit(
@@ -237,224 +239,53 @@ impl P2pService {
         }
     }
 
+    /// Open a local loopback TCP tunnel to `remote_port` on `endpoint_id`.
+    /// Returns the local `tcp://127.0.0.1:<port>` address for Dask/etc.
+    pub async fn open_tcp_tunnel(
+        &self,
+        endpoint_id: &str,
+        remote_port: u16,
+    ) -> Result<String, String> {
+        let id: EndpointId = endpoint_id
+            .parse()
+            .map_err(|e| format!("Invalid endpoint id: {e}"))?;
+        let tunnel =
+            tcp_proxy::open_tunnel(self.endpoint.clone(), id, remote_port).await?;
+        let addr = tunnel.local_tcp_address();
+        log::info!(
+            "iroh tcp-proxy: tunnel {} -> {endpoint_id}:{remote_port}",
+            addr
+        );
+        self.tunnels.write().await.push(tunnel);
+        Ok(addr)
+    }
+
     pub async fn shutdown(&self) {
-        let _ = self.cmd_tx.send(Command::Shutdown).await;
-    }
-}
-
-#[derive(Clone)]
-struct PeerRecord {
-    peer_id: PeerId,
-    addresses: Vec<Multiaddr>,
-    connected_since: chrono::DateTime<Utc>,
-    last_seen: chrono::DateTime<Utc>,
-}
-
-impl PeerRecord {
-    fn to_peer_info(&self) -> PeerInfo {
-        let (host, port) = extract_host_port(self.addresses.first());
-        PeerInfo {
-            node_id: self.peer_id.to_string(),
-            node_name: self.peer_id.to_string(),
-            host,
-            port,
-            status: NodeStatus::Online,
-            resources: ResourceInfo::default(),
-            version: "1.0.0".into(),
-            connected_since: self.connected_since,
-            last_heartbeat: self.last_seen,
-            latency_ms: 0,
+        self.tunnels.write().await.clear();
+        if let Err(e) = self.router.shutdown().await {
+            log::warn!("iroh: router shutdown: {e}");
         }
     }
 }
 
-fn extract_host_port(addr: Option<&Multiaddr>) -> (String, u16) {
-    let Some(addr) = addr else {
-        return ("0.0.0.0".into(), 0);
-    };
-    let mut host = "0.0.0.0".to_string();
-    let mut port = 0u16;
-    for p in addr.iter() {
-        match p {
-            Protocol::Ip4(ip) => host = ip.to_string(),
-            Protocol::Ip6(ip) => host = ip.to_string(),
-            Protocol::Tcp(p) | Protocol::Udp(p) => port = p,
-            _ => {}
-        }
-    }
-    (host, port)
-}
-
-fn resolve_listen_addrs() -> Vec<Multiaddr> {
-    if let Ok(raw) = std::env::var("CLUSTER_RUNTIME_P2P_LISTEN") {
-        return raw
-            .split(',')
-            .filter_map(|s| {
-                let t = s.trim();
-                if t.is_empty() {
-                    None
-                } else {
-                    t.parse().ok()
-                }
-            })
-            .collect();
-    }
-    // Firewall-friendly defaults: WS on 8080, then try 80 / 443.
-    let defaults = [
-        "/ip4/0.0.0.0/tcp/8080/ws",
-        "/ip4/0.0.0.0/tcp/80/ws",
-        "/ip4/0.0.0.0/tcp/443/ws",
-    ];
-    defaults.iter().filter_map(|s| s.parse().ok()).collect()
-}
-
-fn resolve_bootstrap_addrs() -> Vec<Multiaddr> {
-    let Ok(raw) = std::env::var("CLUSTER_RUNTIME_P2P_BOOTSTRAP") else {
-        return Vec::new();
-    };
+fn resolve_bootstrap_endpoint_ids() -> Vec<EndpointId> {
+    let raw = std::env::var("CLUSTER_RUNTIME_IROH_BOOTSTRAP")
+        .or_else(|_| std::env::var("CLUSTER_RUNTIME_P2P_BOOTSTRAP"))
+        .unwrap_or_default();
     raw.split(',')
         .filter_map(|s| {
             let t = s.trim();
             if t.is_empty() {
                 None
             } else {
-                t.parse().ok()
+                match t.parse::<EndpointId>() {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        log::warn!("iroh: skipping invalid bootstrap id '{t}': {e}");
+                        None
+                    }
+                }
             }
         })
         .collect()
-}
-
-async fn handle_swarm_event(
-    swarm: &mut Swarm<ClusterBehaviour>,
-    event: SwarmEvent<ClusterBehaviourEvent>,
-    peers: &Arc<RwLock<HashMap<PeerId, PeerRecord>>>,
-    pending: &Arc<
-        RwLock<
-            HashMap<
-                libp2p::request_response::OutboundRequestId,
-                oneshot::Sender<Result<RemoteJobResponse, String>>,
-            >,
-        >,
-    >,
-    job_api: &Arc<JobApi>,
-    node_name: &str,
-    local_peer_id: PeerId,
-    listen_reported: &Arc<RwLock<Vec<Multiaddr>>>,
-) {
-    match event {
-        SwarmEvent::NewListenAddr { address, .. } => {
-            log::info!("P2P: new listen address {address}");
-            listen_reported.write().await.push(address);
-        }
-        SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
-            let addr = endpoint.get_remote_address().clone();
-            let mut map = peers.write().await;
-            let now = Utc::now();
-            map.entry(peer_id)
-                .and_modify(|r| {
-                    if !r.addresses.contains(&addr) {
-                        r.addresses.push(addr.clone());
-                    }
-                    r.last_seen = now;
-                })
-                .or_insert(PeerRecord {
-                    peer_id,
-                    addresses: vec![addr],
-                    connected_since: now,
-                    last_seen: now,
-                });
-            log::info!("P2P: connected to {peer_id}");
-        }
-        SwarmEvent::ConnectionClosed { peer_id, .. } => {
-            peers.write().await.remove(&peer_id);
-            log::info!("P2P: disconnected from {peer_id}");
-        }
-        SwarmEvent::Behaviour(ClusterBehaviourEvent::Jobs(RrEvent::Message { peer, message })) => {
-            match message {
-                Message::Request {
-                    request, channel, ..
-                } => {
-                    let response =
-                        handle_remote_request(job_api, node_name, local_peer_id, request).await;
-                    let _ = swarm.behaviour_mut().jobs.send_response(channel, response);
-                }
-                Message::Response { request_id, response } => {
-                    if let Some(tx) = pending.write().await.remove(&request_id) {
-                        let _ = tx.send(Ok(response));
-                    } else {
-                        let _ = peer;
-                    }
-                }
-            }
-        }
-        SwarmEvent::Behaviour(ClusterBehaviourEvent::Jobs(RrEvent::OutboundFailure {
-            request_id,
-            error,
-            ..
-        })) => {
-            if let Some(tx) = pending.write().await.remove(&request_id) {
-                let _ = tx.send(Err(error.to_string()));
-            }
-        }
-        SwarmEvent::Behaviour(ClusterBehaviourEvent::Identify(ev)) => {
-            if let identify::Event::Received { peer_id, info, .. } = ev {
-                let mut map = peers.write().await;
-                let now = Utc::now();
-                map.entry(peer_id)
-                    .and_modify(|r| {
-                        for a in &info.listen_addrs {
-                            if !r.addresses.contains(a) {
-                                r.addresses.push(a.clone());
-                            }
-                        }
-                        r.last_seen = now;
-                    })
-                    .or_insert(PeerRecord {
-                        peer_id,
-                        addresses: info.listen_addrs.clone(),
-                        connected_since: now,
-                        last_seen: now,
-                    });
-            }
-        }
-        _ => {}
-    }
-}
-
-async fn handle_remote_request(
-    job_api: &Arc<JobApi>,
-    node_name: &str,
-    local_peer_id: PeerId,
-    request: RemoteJobRequest,
-) -> RemoteJobResponse {
-    match request {
-        RemoteJobRequest::Hello { .. } => RemoteJobResponse::Hello {
-            peer_id: local_peer_id.to_string(),
-            node_name: node_name.to_string(),
-        },
-        RemoteJobRequest::Submit { owner, spec } => match job_api.submit(spec, &owner).await {
-            Ok(ack) => RemoteJobResponse::SubmitAck(ack),
-            Err(e) => RemoteJobResponse::Error {
-                message: e.to_string(),
-            },
-        },
-        RemoteJobRequest::Status { job_id } => match job_api.status(&job_id).await {
-            Ok(status) => RemoteJobResponse::Status { status },
-            Err(e) => RemoteJobResponse::Error {
-                message: e.to_string(),
-            },
-        },
-        RemoteJobRequest::Cancel { job_id } => match job_api.cancel(&job_id).await {
-            Ok(()) => RemoteJobResponse::Cancelled,
-            Err(e) => RemoteJobResponse::Error {
-                message: e.to_string(),
-            },
-        },
-        RemoteJobRequest::Result { job_id } => match job_api.result(&job_id).await {
-            Ok(result) => RemoteJobResponse::Result(result),
-            Err(e) => RemoteJobResponse::Error {
-                message: e.to_string(),
-            },
-        },
-    }
 }

@@ -90,7 +90,7 @@ pub async fn start(state: &AppState) {
         state.data_dir.clone(),
     );
 
-    // libp2p WAN mesh (firewall-friendly ports; does not touch 8129).
+    // iroh WAN mesh (dial-by-EndpointId; does not touch 8129).
     {
         let p2p_slot = state.p2p_service.clone();
         let data_dir = state.data_dir.clone();
@@ -98,13 +98,25 @@ pub async fn start(state: &AppState) {
         match crate::network::p2p::P2pService::start(&data_dir, job_api).await {
             Ok(p2p) => {
                 log::info!(
-                    "P2P: started (local peer {})",
+                    "iroh: started (endpoint {})",
                     p2p.local_peer_id()
                 );
+                // Wire into Dask when the plugin loads so workers can tunnel.
+                let p2p_for_dask = p2p.clone();
+                let dask_slot = state.dask_service.clone();
+                tokio::spawn(async move {
+                    for _ in 0..60 {
+                        if let Some(dask) = dask_slot.read().await.clone() {
+                            dask.set_p2p(p2p_for_dask).await;
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    }
+                });
                 *p2p_slot.write().await = Some(p2p);
             }
             Err(e) => {
-                log::error!("P2P: failed to start: {e}");
+                log::error!("iroh: failed to start: {e}");
             }
         }
     }

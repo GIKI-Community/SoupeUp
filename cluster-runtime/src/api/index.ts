@@ -34,6 +34,7 @@ import type {
   SystemStatus,
   UpdateCheckResult,
   WorkerInfo,
+  NetworkPeer,
 } from "@/types";
 
 async function invokeCommand<T>(
@@ -115,35 +116,16 @@ export const ClusterApi = {
       total_workers: number;
       total_available_compute: number;
     }>("get_cluster_summary"),
-  getPeers: () =>
-    invokeCommand<
-      {
-        node_id: string;
-        node_name: string;
-        host: string;
-        port: number;
-        status:
-          | "Online"
-          | "Offline"
-          | "Connecting"
-          | "Authenticating"
-          | "Disconnected";
-        resources: {
-          cpu_cores: number;
-          cpu_usage: number;
-          ram_total: number;
-          ram_used: number;
-          ram_available: number;
-          gpu_count: number;
-          worker_count: number;
-          active_jobs: number;
-        };
-        version: string;
-        connected_since: string;
-        last_heartbeat: string;
-        latency_ms: number;
-      }[]
-    >("get_cluster_peers"),
+  getPeers: () => invokeCommand<NetworkPeer[]>("get_cluster_peers"),
+};
+
+export const NetworkApi = {
+  localEndpointId: () =>
+    invokeCommand<string | null>("p2p_local_peer_id"),
+  listenAddrs: () => invokeCommand<string[]>("p2p_listen_addrs"),
+  peers: () => invokeCommand<NetworkPeer[]>("get_cluster_peers"),
+  connect: (endpointId: string) =>
+    invokeCommand<void>("p2p_connect", { endpointId }),
 };
 
 export const PythonApi = {

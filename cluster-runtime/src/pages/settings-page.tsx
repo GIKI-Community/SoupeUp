@@ -142,13 +142,26 @@ function DaskSchedulerSettings() {
             />
           </div>
           <div className="space-y-2">
-            <Label>Scheduler Address (workers join this)</Label>
+            <Label>Scheduler Address (LAN TCP for workers)</Label>
             <Input
               value={draft.schedulerAddress}
               onChange={(e) => update("schedulerAddress", e.target.value)}
               className="bg-background font-mono text-xs"
               placeholder="tcp://192.168.1.10:8786"
             />
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label>Scheduler EndpointId (iroh tunnel)</Label>
+            <Input
+              value={draft.schedulerEndpointId ?? ""}
+              onChange={(e) => update("schedulerEndpointId", e.target.value)}
+              className="bg-background font-mono text-xs"
+              placeholder="Paste remote node's EndpointId to join over iroh"
+            />
+            <p className="text-xs text-muted-foreground">
+              When set, Start Worker tunnels to this node&apos;s :8786 over iroh
+              instead of using the LAN address. Leave empty for TCP-only joins.
+            </p>
           </div>
           <div className="space-y-2">
             <Label>Worker Threads (0 = auto)</Label>

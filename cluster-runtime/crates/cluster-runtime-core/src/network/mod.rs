@@ -1,7 +1,7 @@
 //! Network layer for cluster communication
 //!
 //! Legacy UDP/TCP modules remain for reference; the active WAN plane is
-//! [`p2p`] (libp2p on firewall-friendly ports).
+//! [`p2p`] (iroh QUIC, dial-by-EndpointId).
 
 pub mod authentication;
 pub mod cluster;

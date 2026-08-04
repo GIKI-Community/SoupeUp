@@ -7,6 +7,7 @@ import { DashboardPage } from "./pages/dashboard-page";
 import { JobsPage } from "./pages/jobs-page";
 import { LogsPage } from "./pages/logs-page";
 import { MetricsPage } from "./pages/metrics-page";
+import { NetworkPage } from "./pages/network-page";
 import { NodesPage } from "./pages/nodes-page";
 import { PluginsPage } from "./pages/plugins-page";
 import { SettingsPage } from "./pages/settings-page";
@@ -18,6 +19,7 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/cluster" element={<ClusterPage />} />
+          <Route path="/network" element={<NetworkPage />} />
           <Route path="/compute" element={<ComputePage />} />
           <Route path="/nodes" element={<NodesPage />} />
           <Route path="/jobs" element={<JobsPage />} />

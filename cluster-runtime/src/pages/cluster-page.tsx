@@ -303,7 +303,7 @@ export function ClusterPage() {
                   Worker
                 </CardTitle>
                 <CardDescription>
-                  Join a scheduler by address — use this on worker-only machines.
+                  Join a scheduler by LAN TCP address or iroh EndpointId (tunnel).
                 </CardDescription>
               </div>
               <Badge variant={statusVariant(localWorker?.status ?? "stopped")}>
@@ -313,14 +313,24 @@ export function ClusterPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="join-address">Scheduler address</Label>
+              <Label htmlFor="join-address">
+                Scheduler address or EndpointId
+              </Label>
               <Input
                 id="join-address"
                 className="font-mono text-xs"
                 value={joinAddress}
                 onChange={(e) => setJoinAddress(e.target.value)}
-                placeholder="tcp://192.168.1.10:8786"
+                placeholder="tcp://192.168.1.10:8786  or  EndpointId"
               />
+              <p className="text-xs text-muted-foreground">
+                Paste a LAN <code className="text-[10px]">tcp://…</code> address,
+                or an iroh EndpointId from the{" "}
+                <a href="#/network" className="underline underline-offset-2">
+                  Network
+                </a>{" "}
+                page.
+              </p>
             </div>
             {localWorker?.error && (
               <p className="text-sm text-destructive">{localWorker.error}</p>

@@ -61,9 +61,16 @@ src-tauri/src/dask/
 | **Restart** | Stop then Start |
 | **Status / Health** | Polls process state + parses `DASK_SCHEDULER_READY` stdout |
 
-Default bind: `0.0.0.0:8786`, dashboard `:8787`.
+Default bind: `0.0.0.0:8786`, dashboard `:8787`. When the iroh mesh is running,
+the scheduler is tightened to `127.0.0.1:8786` and remote workers reach it via an
+iroh TCP tunnel (no LAN port required).
 
-Workers on other machines must connect to the **LAN IP**, e.g. `tcp://192.168.1.10:8786` — configure this under **Settings → Dask Scheduler → Scheduler Address**.
+**LAN join:** workers connect to the scheduler **LAN IP**, e.g.
+`tcp://192.168.1.10:8786` — configure under Settings → Scheduler Address.
+
+**iroh join:** on the worker node run `dask worker start <schedulerEndpointId>`
+(or set `schedulerEndpointId` in settings). Cluster Runtime opens a local
+`tcp://127.0.0.1:<ephemeral>` tunnel to the remote scheduler's `:8786`.
 
 ---
 
@@ -75,8 +82,8 @@ Workers on other machines must connect to the **LAN IP**, e.g. `tcp://192.168.1.
 | **Stop / Restart** | Managed process stop / restart |
 | **Status / Health** | Process poll + `DASK_WORKER_READY` line |
 
-Manual scheduler address is supported from the Cluster page (“Scheduler address” field).
-
+Manual scheduler address is supported from the Cluster page (“Scheduler address” field),
+or pass an iroh EndpointId to tunnel across networks.
 ---
 
 ## Client API

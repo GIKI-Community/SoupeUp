@@ -93,9 +93,18 @@ export const useDaskStore = create<DaskState>((set, get) => ({
   fetchSettings: async () => {
     try {
       const settings = await DaskApi.getSettings();
+      const normalized: DaskSettings = {
+        ...settings,
+        schedulerEndpointId: settings.schedulerEndpointId ?? "",
+      };
+      const join =
+        (normalized.schedulerEndpointId &&
+          normalized.schedulerEndpointId.trim()) ||
+        normalized.schedulerAddress ||
+        get().joinAddress;
       set({
-        settings,
-        joinAddress: settings.schedulerAddress || get().joinAddress,
+        settings: normalized,
+        joinAddress: join,
         error: null,
       });
     } catch (error) {
@@ -125,12 +134,15 @@ export const useDaskStore = create<DaskState>((set, get) => ({
     set({ isBusy: true, error: null });
     try {
       const saved = await DaskApi.updateSettings(settings);
-      set({ settings: saved, isBusy: false, joinAddress: saved.schedulerAddress });
+      const join =
+        (saved.schedulerEndpointId && saved.schedulerEndpointId.trim()) ||
+        saved.schedulerAddress;
+      set({ settings: saved, isBusy: false, joinAddress: join });
       return true;
     } catch (error) {
       set({
         isBusy: false,
-        error: errMessage(error, "Failed to save settings"),
+        error: errMessage(error, "Failed to save Dask settings"),
       });
       return false;
     }

@@ -1252,15 +1252,17 @@ pub async fn p2p_listen_addrs(
 #[tauri::command]
 pub async fn p2p_connect(
     state: tauri::State<'_, cluster_runtime_core::AppState>,
-    multiaddr: String,
+    endpoint_id: String,
 ) -> Result<(), String> {
     let p2p = state
         .p2p_service
         .read()
         .await
         .clone()
-        .ok_or_else(|| "P2P not started".to_string())?;
-    p2p.connect(&multiaddr).await
+        .ok_or_else(|| "iroh mesh not started".to_string())?;
+    // Accept legacy `multiaddr` param name from older frontends by treating
+    // the string as an EndpointId.
+    p2p.connect(&endpoint_id).await
 }
 
 // ─── Updates (check + notify) ─────────────────────────────────────────────────

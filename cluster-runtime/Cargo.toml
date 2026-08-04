@@ -7,9 +7,9 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-authors = ["Cluster Runtime Contributors"]
+authors = ["Mian Ali Ahmed"]
 
 [profile.release]
 codegen-units = 1

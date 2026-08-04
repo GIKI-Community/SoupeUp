@@ -373,6 +373,8 @@ export interface DaskSettings {
   schedulerPort: number;
   dashboardPort: number;
   schedulerAddress: string;
+  /** When set, workers tunnel to this iroh EndpointId instead of LAN TCP. */
+  schedulerEndpointId?: string;
   workerThreads: number;
   workerMemoryLimit: string;
   workerName: string;
@@ -564,3 +566,21 @@ export const RAY_EXAMPLES = [
   },
 ] as const;
 
+
+/** Peer from the iroh WAN mesh (`get_cluster_peers`). */
+export interface NetworkPeer {
+  node_id: string;
+  node_name: string;
+  host: string;
+  port: number;
+  status:
+    | "Online"
+    | "Offline"
+    | "Connecting"
+    | "Authenticating"
+    | "Disconnected";
+  version: string;
+  connected_since: string;
+  last_heartbeat: string;
+  latency_ms: number;
+}

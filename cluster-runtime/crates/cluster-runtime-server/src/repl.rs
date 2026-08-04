@@ -104,9 +104,10 @@ fn print_help() {
   Dask compute cluster (scheduler/worker processes):
   dask status                  Local Dask snapshot
   dask start|stop              Start/stop LOCAL scheduler (and a local worker on start)
-  dask worker start <host>     Join a REMOTE scheduler as a worker (default port 8786)
-                               examples: dask worker start 10.21.5.4
-                                         dask worker start tcp://10.21.5.4:8786
+  dask worker start <target>   Join a REMOTE scheduler as a worker
+                               TCP:  dask worker start 10.21.5.4
+                                     dask worker start tcp://10.21.5.4:8786
+                               iroh: dask worker start <EndpointId>
   dask worker stop|status      Stop / show local worker process
 
   Ray:
@@ -116,10 +117,9 @@ fn print_help() {
                                          ray worker start 10.21.5.4:6379
   ray worker stop|status
 
-  P2P mesh (Cluster Runtime apps talking to each other — NOT Dask/Ray):
-  peer list                    Show this node's peer id + connected peers
-  peer connect <multiaddr>     Dial another Cluster Runtime (port 8080)
-                               example: peer connect /ip4/10.21.5.4/tcp/8080/ws
+  iroh mesh (Cluster Runtime apps talking to each other — NOT Dask/Ray wire protocol):
+  peer list                    Show this node's EndpointId + connected peers
+  peer connect <EndpointId>    Dial another Cluster Runtime by iroh EndpointId
 
   logs [n]                     Last n log lines (default 40)
   quit                         Stop the server
@@ -127,7 +127,8 @@ fn print_help() {
 Quick pick:
   Join Windows Ray head as worker   →  ray worker start WINDOWS_IP
   Join Windows Dask as worker       →  dask worker start WINDOWS_IP
-  Link two Cluster Runtime apps     →  peer connect /ip4/OTHER_IP/tcp/8080/ws"
+                                       (or EndpointId for iroh tunnel)
+  Link two Cluster Runtime apps     →  peer connect <EndpointId>"
     );
 }
 
@@ -439,15 +440,15 @@ async fn ray_cmd(state: &AppState, args: &[&str]) {
 
 async fn peer_cmd(state: &AppState, args: &[&str]) {
     let Some(p2p) = state.p2p_service.read().await.clone() else {
-        println!("p2p not started");
+        println!("iroh mesh not started");
         return;
     };
     match args[0].to_ascii_lowercase().as_str() {
         "list" => match p2p.list_peers().await {
             Ok(peers) => {
-                println!("local={}", p2p.local_peer_id());
+                println!("local_endpoint_id={}", p2p.local_peer_id());
                 if let Ok(addrs) = p2p.listen_addrs().await {
-                    println!("listen_addrs (replace 0.0.0.0 with this machine's IP when dialing from elsewhere):");
+                    println!("addrs:");
                     for a in addrs {
                         println!("  {a}");
                     }
@@ -464,28 +465,25 @@ async fn peer_cmd(state: &AppState, args: &[&str]) {
         "connect" => {
             if args.len() < 2 {
                 println!(
-                    "usage: peer connect /ip4/<ip>/tcp/8080/ws\nexample: peer connect /ip4/10.21.5.4/tcp/8080/ws"
+                    "usage: peer connect <EndpointId>\nexample: peer connect <z-base32 public key>"
                 );
                 return;
             }
-            let addr = args[1];
-            if !addr.starts_with('/') {
+            let endpoint_id = args[1];
+            if endpoint_id.starts_with('/') {
                 println!(
-                    "invalid multiaddr '{addr}'.\n\
-                     peer connect is for Cluster Runtime P2P (port 8080), not Dask.\n\
-                     example: peer connect /ip4/10.21.5.4/tcp/8080/ws\n\
-                     to join a Dask scheduler instead: dask worker start tcp://10.21.5.4:8786"
+                    "multiaddrs are no longer used.\n\
+                     peer connect expects an iroh EndpointId.\n\
+                     run 'peer list' on the other node to copy its EndpointId."
                 );
                 return;
             }
-            match p2p.connect(addr).await {
-                Ok(()) => println!("dialing {addr}"),
+            match p2p.connect(endpoint_id).await {
+                Ok(()) => println!("connected to {endpoint_id}"),
                 Err(e) => println!("error: {e}"),
             }
         }
-        _ => println!(
-            "usage: peer list | peer connect /ip4/<ip>/tcp/8080/ws"
-        ),
+        _ => println!("usage: peer list | peer connect <EndpointId>"),
     }
 }
 

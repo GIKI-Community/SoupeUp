@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaskSettings {
-    /// Host the scheduler binds to (use 0.0.0.0 for multi-node).
+    /// Host the scheduler binds to (use 0.0.0.0 for multi-node LAN; 127.0.0.1 when using iroh tunnels).
     pub scheduler_host: String,
     /// Port the scheduler listens on.
     pub scheduler_port: u16,
@@ -12,6 +12,9 @@ pub struct DaskSettings {
     pub dashboard_port: u16,
     /// Address workers connect to (e.g. tcp://192.168.1.10:8786).
     pub scheduler_address: String,
+    /// When set, workers open an iroh TCP tunnel to this EndpointId instead of dialing LAN TCP.
+    #[serde(default)]
+    pub scheduler_endpoint_id: String,
     /// Worker thread count (0 = auto).
     pub worker_threads: usize,
     /// Optional memory limit string understood by Dask (e.g. "4GB").
@@ -31,6 +34,7 @@ impl Default for DaskSettings {
             scheduler_port: 8786,
             dashboard_port: 8787,
             scheduler_address: "tcp://127.0.0.1:8786".to_string(),
+            scheduler_endpoint_id: String::new(),
             worker_threads: 0,
             worker_memory_limit: String::new(),
             worker_name: "worker-1".to_string(),
@@ -52,6 +56,18 @@ impl DaskSettings {
         } else {
             format!("tcp://{}:{}", self.scheduler_host, self.scheduler_port)
         }
+    }
+
+    /// True if `raw` looks like an iroh EndpointId (not a host/tcp address).
+    pub fn looks_like_endpoint_id(raw: &str) -> bool {
+        let s = raw.trim();
+        if s.is_empty() || s.contains(':') || s.contains('/') || s.contains('.') {
+            return false;
+        }
+        // iroh EndpointIds are z-base32 public keys (~52 chars of alphanumeric).
+        s.len() >= 40
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric())
     }
 
     /// Normalize user input to `tcp://host:port`, filling CR defaults when omitted.

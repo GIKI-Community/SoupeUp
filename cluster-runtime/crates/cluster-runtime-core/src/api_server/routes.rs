@@ -179,7 +179,7 @@ async fn get_nodes(State(ctx): State<ApiContext>) -> ApiResult<Value> {
 #[serde(rename_all = "camelCase")]
 struct SubmitQuery {
     owner: Option<String>,
-    /// When set, forward the job to a remote peer over libp2p.
+    /// When set, forward the job to a remote peer over iroh.
     target_peer: Option<String>,
 }
 
@@ -262,6 +262,7 @@ async fn get_logs() -> Json<Value> {
 async fn list_peers(State(ctx): State<ApiContext>) -> ApiResult<Value> {
     let Some(p2p) = ctx.p2p_service.read().await.clone() else {
         return Ok(Json(json!({
+            "localEndpointId": null,
             "localPeerId": null,
             "listenAddrs": [],
             "peers": [],
@@ -270,6 +271,7 @@ async fn list_peers(State(ctx): State<ApiContext>) -> ApiResult<Value> {
     let peers = p2p.list_peers().await.map_err(ApiError::internal)?;
     let listen_addrs = p2p.listen_addrs().await.unwrap_or_default();
     Ok(Json(json!({
+        "localEndpointId": p2p.local_peer_id(),
         "localPeerId": p2p.local_peer_id(),
         "listenAddrs": listen_addrs,
         "peers": peers,
@@ -279,7 +281,12 @@ async fn list_peers(State(ctx): State<ApiContext>) -> ApiResult<Value> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConnectPeerBody {
-    multiaddr: String,
+    /// iroh EndpointId to dial.
+    #[serde(default)]
+    endpoint_id: Option<String>,
+    /// Deprecated alias accepted for compatibility.
+    #[serde(default)]
+    multiaddr: Option<String>,
 }
 
 async fn connect_peer(
@@ -292,10 +299,20 @@ async fn connect_peer(
         .await
         .clone()
         .ok_or_else(|| ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "P2P not started"))?;
-    p2p.connect(&body.multiaddr)
+    let endpoint_id = body
+        .endpoint_id
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| body.multiaddr.filter(|s| !s.trim().is_empty()))
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "endpointId is required (iroh EndpointId string)",
+            )
+        })?;
+    p2p.connect(&endpoint_id)
         .await
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "connected": body.multiaddr })))
+    Ok(Json(json!({ "connected": endpoint_id })))
 }
 
 async fn require_python(

@@ -26,19 +26,22 @@ ApiServer (axum)
         │
         ├─ JobManager / JobApi
         ├─ SchedulerRegistry → Dask / Ray / MPI adapters
-        ├─ P2P (libp2p WAN mesh on :8080/ws)
+        ├─ P2P (iroh WAN mesh, dial-by-EndpointId)
         └─ EventBus → WebSocket stream
 ```
 
 Either the desktop app **or** the headless server hosts the API — do not run both
 against the same port/data dir at once. Clients only talk to the local HTTP API;
-they never touch Dask, Ray, or MPI directly. Cross-node traffic uses libp2p
-(default WebSocket listen `/ip4/0.0.0.0/tcp/8080/ws`; optional 80/443).
+they never touch Dask, Ray, or MPI directly. Cross-node Cluster Runtime traffic
+uses **iroh** (QUIC + n0 relays / hole punching). Dial peers by EndpointId.
 
-WAN join: set `CLUSTER_RUNTIME_P2P_BOOTSTRAP` to peer multiaddrs, and/or
-`POST /v1/peers` with `{ "multiaddr": "…" }`. Override listens with
-`CLUSTER_RUNTIME_P2P_LISTEN`.
+WAN join: set `CLUSTER_RUNTIME_IROH_BOOTSTRAP` to comma-separated EndpointIds,
+and/or `POST /v1/peers` with `{ "endpointId": "…" }`. (`CLUSTER_RUNTIME_P2P_BOOTSTRAP`
+is accepted as a deprecated alias.)
 
+Dask workers can also reach a remote scheduler over iroh: pass the scheduler
+node's EndpointId to `dask worker start <EndpointId>` (opens a local TCP tunnel
+to the remote `:8786`).
 ## Desktop / headless API server
 
 Both the Tauri desktop app and the headless binary (`cluster-runtime-server`)
@@ -87,14 +90,14 @@ REPL commands include `status`, `dask start|stop`, `ray start|stop`, `scheduler 
 | PUT | `/v1/schedulers/active` | yes | Body `{ pluginId }` |
 | GET | `/v1/cluster` | yes | Cluster overview (scheduler, workers, cores, memory) |
 | GET | `/v1/nodes` | yes | Worker nodes |
-| POST | `/v1/jobs` | yes | Submit a `JobSpec` (`?owner=` optional; `?targetPeer=` forwards over P2P) |
+| POST | `/v1/jobs` | yes | Submit a `JobSpec` (`?owner=` optional; `?targetPeer=` forwards over iroh) |
 | GET | `/v1/jobs` | yes | List jobs |
 | GET | `/v1/jobs/:id` | yes | Job detail (progress, logs, result) |
 | GET | `/v1/jobs/:id/result` | yes | Job result |
 | POST | `/v1/jobs/:id/cancel` | yes | Cancel a job |
 | POST | `/v1/jobs/:id/retry` | yes | Retry a job |
-| GET | `/v1/peers` | yes | Local peer id, listen addrs, connected peers |
-| POST | `/v1/peers` | yes | Dial a peer (`{ "multiaddr": "…" }`) |
+| GET | `/v1/peers` | yes | Local EndpointId, addrs, connected peers |
+| POST | `/v1/peers` | yes | Dial a peer (`{ "endpointId": "…" }`) |
 | GET | `/v1/logs` | yes | Recent runtime logs |
 | GET | `/v1/events` | yes | WebSocket event + status stream |
 

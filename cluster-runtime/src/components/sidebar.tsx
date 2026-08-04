@@ -4,6 +4,7 @@ import {
   Cpu,
   FileText,
   LayoutDashboard,
+  Link2,
   Network,
   Puzzle,
   ScrollText,
@@ -17,13 +18,14 @@ import { cn } from "@/lib/utils";
 const navItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/cluster", label: "Cluster", icon: Network, end: false },
+  { to: "/network", label: "Network", icon: Link2, end: false },
   { to: "/compute", label: "Compute", icon: Server, end: false },
   { to: "/nodes", label: "Nodes", icon: Server, end: false },
   { to: "/jobs", label: "Jobs", icon: Box, end: false },
   { to: "/plugins", label: "Plugins", icon: Puzzle, end: false },
   { to: "/metrics", label: "Metrics", icon: Activity, end: false },
   { to: "/logs", label: "Logs", icon: ScrollText, end: false },
-  { to: "/settings", label: "Settings", icon: Settings, end: false },
+  { to: "/settings", label: "Settings", end: false, icon: Settings },
 ] as const;
 
 export function Sidebar() {
@@ -63,10 +65,10 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-sidebar-border p-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <FileText className="h-3.5 w-3.5" />
-          <span>Local cluster mode</span>
-        </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <FileText className="h-3.5 w-3.5" />
+            <span>iroh mesh + local API</span>
+          </div>
       </div>
     </aside>
   );

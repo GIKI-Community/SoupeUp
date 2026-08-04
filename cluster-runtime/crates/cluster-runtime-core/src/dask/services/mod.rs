@@ -33,6 +33,8 @@ pub struct DaskService {
     jobs: Arc<JobService>,
     monitoring: Arc<MonitoringService>,
     packages_ready: Arc<RwLock<bool>>,
+    /// Optional iroh mesh for tunneling scheduler TCP.
+    p2p: Arc<RwLock<Option<Arc<crate::network::p2p::P2pService>>>>,
 }
 
 impl DaskService {
@@ -57,7 +59,13 @@ impl DaskService {
             jobs,
             monitoring,
             packages_ready: Arc::new(RwLock::new(false)),
+            p2p: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Attach the iroh mesh so workers can open TCP tunnels to remote schedulers.
+    pub async fn set_p2p(&self, p2p: Arc<crate::network::p2p::P2pService>) {
+        *self.p2p.write().await = Some(p2p);
     }
 
     /// Ensure required packages are installed via the Python Runtime package manager.
@@ -125,6 +133,16 @@ impl DaskService {
 
     pub async fn start_scheduler(&self) -> DaskResult<SchedulerInfo> {
         self.ensure_packages().await?;
+        // When the iroh mesh is up, prefer loopback so the tcp-proxy ALPN can
+        // reach the scheduler without exposing :8786 on the LAN.
+        if self.p2p.read().await.is_some() {
+            let mut settings = self.settings.write().await;
+            if settings.scheduler_host == "0.0.0.0" {
+                settings.scheduler_host = "127.0.0.1".to_string();
+                settings.scheduler_address =
+                    format!("tcp://127.0.0.1:{}", settings.scheduler_port);
+            }
+        }
         self.scheduler.start().await
     }
 
@@ -149,13 +167,59 @@ impl DaskService {
 
     pub async fn start_worker(&self, scheduler_address: Option<String>) -> DaskResult<WorkerInfo> {
         self.ensure_packages().await?;
-        let normalized = scheduler_address
-            .filter(|s| !s.trim().is_empty())
-            .map(|s| crate::dask::settings::DaskSettings::normalize_scheduler_address(&s));
-        if let Some(ref addr) = normalized {
-            self.settings.write().await.scheduler_address = addr.clone();
+
+        let raw = scheduler_address.filter(|s| !s.trim().is_empty());
+        let mut endpoint_id: Option<String> = None;
+        let mut tcp_addr: Option<String> = None;
+
+        if let Some(ref s) = raw {
+            let trimmed = s.trim();
+            let as_iroh = trimmed
+                .strip_prefix("iroh:")
+                .or_else(|| trimmed.strip_prefix("endpoint:"))
+                .unwrap_or(trimmed);
+            if DaskSettings::looks_like_endpoint_id(as_iroh) {
+                endpoint_id = Some(as_iroh.to_string());
+            } else {
+                tcp_addr = Some(DaskSettings::normalize_scheduler_address(trimmed));
+            }
         }
-        self.worker.start(normalized).await
+
+        if endpoint_id.is_none() {
+            let settings = self.settings.read().await;
+            if !settings.scheduler_endpoint_id.trim().is_empty() {
+                endpoint_id = Some(settings.scheduler_endpoint_id.trim().to_string());
+            }
+        }
+
+        let connect_addr = if let Some(eid) = endpoint_id {
+            let p2p = self.p2p.read().await.clone().ok_or_else(|| {
+                DaskError::WorkerError(
+                    "iroh mesh not available; cannot tunnel to scheduler EndpointId".into(),
+                )
+            })?;
+            let port = self.settings.read().await.scheduler_port;
+            {
+                let mut settings = self.settings.write().await;
+                settings.scheduler_endpoint_id = eid.clone();
+            }
+            let local = p2p
+                .open_tcp_tunnel(&eid, port)
+                .await
+                .map_err(|e| DaskError::WorkerError(e))?;
+            {
+                let mut settings = self.settings.write().await;
+                settings.scheduler_address = local.clone();
+            }
+            Some(local)
+        } else if let Some(addr) = tcp_addr {
+            self.settings.write().await.scheduler_address = addr.clone();
+            Some(addr)
+        } else {
+            None
+        };
+
+        self.worker.start(connect_addr).await
     }
 
     pub async fn stop_worker(&self) -> DaskResult<WorkerInfo> {

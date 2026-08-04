@@ -37,12 +37,16 @@ struct Cli {
     #[arg(long, env = "CLUSTER_RUNTIME_PYTHON_DIR")]
     python_dir: Option<PathBuf>,
 
-    /// Display name for this node on the P2P mesh
+    /// Display name for this node on the iroh mesh
     #[arg(long, env = "CLUSTER_RUNTIME_NODE_NAME")]
     node_name: Option<String>,
 
-    /// Comma-separated libp2p multiaddrs to dial on startup
-    #[arg(long, env = "CLUSTER_RUNTIME_P2P_BOOTSTRAP")]
+    /// Comma-separated iroh EndpointIds to dial on startup
+    #[arg(long = "iroh-bootstrap", env = "CLUSTER_RUNTIME_IROH_BOOTSTRAP")]
+    iroh_bootstrap: Option<String>,
+
+    /// Deprecated alias for `--iroh-bootstrap`
+    #[arg(long = "p2p-bootstrap", env = "CLUSTER_RUNTIME_P2P_BOOTSTRAP", hide = true)]
     p2p_bootstrap: Option<String>,
 
     /// Enable plugin by id (repeatable), applied before bootstrap
@@ -79,7 +83,8 @@ fn apply_env(cli: &Cli, data_dir: &PathBuf) {
     if let Some(v) = &cli.node_name {
         std::env::set_var("CLUSTER_RUNTIME_NODE_NAME", v);
     }
-    if let Some(v) = &cli.p2p_bootstrap {
+    if let Some(v) = cli.iroh_bootstrap.as_ref().or(cli.p2p_bootstrap.as_ref()) {
+        std::env::set_var("CLUSTER_RUNTIME_IROH_BOOTSTRAP", v);
         std::env::set_var("CLUSTER_RUNTIME_P2P_BOOTSTRAP", v);
     }
 }
