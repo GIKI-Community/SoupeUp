@@ -128,7 +128,6 @@ impl BackgroundProcessManager {
         // SIGTERM the Cluster Runtime parent process.
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             unsafe {
                 cmd.pre_exec(|| {
                     // setsid() makes this process a session leader (new PGID).
